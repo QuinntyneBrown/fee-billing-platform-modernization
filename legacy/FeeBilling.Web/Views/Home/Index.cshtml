@@ -1,0 +1,39 @@
+@{
+    ViewBag.Title = "Billing";
+}
+
+@section navbar {
+    <ul class="nav navbar-nav">
+        <li><a href="#!/billing"><span class="glyphicon glyphicon-list-alt"></span> Billing</a></li>
+        <li><a href="#!/schedules"><span class="glyphicon glyphicon-tasks"></span> Fee schedules</a></li>
+        <li><a href="#!/accounts"><span class="glyphicon glyphicon-user"></span> Accounts</a></li>
+    </ul>
+    @using (Html.BeginForm("Logout", "Account", FormMethod.Post, new { id = "logoutForm", @class = "navbar-form navbar-right" }))
+    {
+        @Html.AntiForgeryToken()
+        <button type="submit" class="btn btn-default btn-sm">Log out</button>
+    }
+    <p class="navbar-text navbar-right">Signed in as <strong>@ViewBag.UserName</strong></p>
+}
+
+<div ng-app="feeBilling" ng-cloak>
+    <div ng-view></div>
+</div>
+
+@section scripts {
+    <script>
+        // Settings the SPA needs from the server. Hard-coded until there is an api/config endpoint.
+        window.feeBillingConfig = { defaultFirmId: 1 };
+    </script>
+
+    @* Order matters: module, then routes, then services, then controllers. No bundling. *@
+    <script src="~/App/app.module.js"></script>
+    <script src="~/App/app.routes.js"></script>
+    <script src="~/App/services/api.service.js"></script>
+    <script src="~/App/billing/billing-review.controller.js"></script>
+    <script src="~/App/billing/run-invoices.controller.js"></script>
+    <script src="~/App/schedules/schedule-list.controller.js"></script>
+    <script src="~/App/schedules/schedule-edit.controller.js"></script>
+    <script src="~/App/accounts/account-list.controller.js"></script>
+    <script src="~/App/accounts/household-detail.controller.js"></script>
+}

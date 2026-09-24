@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>FeeBilling.Core</RootNamespace>
+    <AssemblyName>FeeBilling.Core</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="EntityFramework" Version="6.4.4" />
+    <PackageReference Include="log4net" Version="2.0.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Web" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FeeBilling.Data\FeeBilling.Data.csproj" />
+    <ProjectReference Include="..\..\src\FeeBilling.Domain\FeeBilling.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

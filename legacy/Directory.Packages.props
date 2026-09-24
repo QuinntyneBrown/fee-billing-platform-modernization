@@ -1,0 +1,6 @@
+<Project>
+  <!-- Legacy projects pin their own package versions (formerly packages.config). -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

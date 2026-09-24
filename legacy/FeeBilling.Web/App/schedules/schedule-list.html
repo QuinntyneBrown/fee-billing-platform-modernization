@@ -1,0 +1,53 @@
+<div class="page-header">
+    <a class="btn btn-primary pull-right" href="#!/schedules/new">
+        <span class="glyphicon glyphicon-plus"></span> New schedule
+    </a>
+    <h2>Fee schedules</h2>
+</div>
+
+<div class="alert alert-danger" ng-if="vm.error">{{vm.error}}</div>
+
+<div class="checkbox">
+    <label>
+        <input type="checkbox" ng-model="vm.showInactive" /> Show inactive schedules
+    </label>
+</div>
+
+<p class="text-muted" ng-if="vm.loading">
+    <span class="glyphicon glyphicon-refresh fb-spin"></span> Loading fee schedules...
+</p>
+
+<table class="table table-striped table-condensed table-hover">
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Household</th>
+            <th class="text-right">Minimum</th>
+            <th>Tiers (annual rate)</th>
+            <th>Active</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr ng-repeat="s in vm.schedules | filter:vm.isVisible | orderBy:'Code'">
+            <td><a ng-href="#!/schedules/{{s.Id}}">{{s.Code}}</a></td>
+            <td>{{s.Name}}</td>
+            <td>{{s.ScheduleType}}</td>
+            <td><span class="glyphicon glyphicon-ok" ng-if="s.IsHousehold"></span></td>
+            <td class="text-right">{{s.MinimumAnnualFee | currency}}</td>
+            <td class="tier-summary">
+                <span ng-if="s.ScheduleType == 'FLAT'">Flat {{s.FlatAnnualFee | currency}}</span>
+                <span ng-repeat="tier in s.Tiers"
+                      title="{{tier.LowerBound | number:0}} to {{tier.UpperBound ? (tier.UpperBound | number:0) : 'no limit'}}">{{tier.AnnualRate * 100 | number:3}}%<span ng-if="!$last"> / </span></span>
+            </td>
+            <td>
+                <span class="label label-success" ng-if="s.IsActive">Active</span>
+                <span class="label label-default" ng-if="!s.IsActive">Inactive</span>
+            </td>
+        </tr>
+        <tr ng-if="!vm.loading && vm.schedules.length === 0">
+            <td colspan="7" class="text-muted">No fee schedules.</td>
+        </tr>
+    </tbody>
+</table>

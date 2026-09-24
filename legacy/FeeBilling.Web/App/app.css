@@ -1,0 +1,83 @@
+/* FeeBilling SPA - small overrides on top of Bootstrap 3.3.7 */
+
+/* Angular is loaded at the bottom of the page, so its own ng-cloak style arrives too late. */
+[ng\:cloak], [ng-cloak], .ng-cloak {
+    display: none !important;
+}
+
+body {
+    padding-bottom: 20px;
+}
+
+.navbar-brand {
+    font-weight: bold;
+    letter-spacing: 0.5px;
+}
+
+.body-content {
+    padding-left: 15px;
+    padding-right: 15px;
+}
+
+.login-panel {
+    margin-top: 60px;
+}
+
+.billing-toolbar,
+.account-toolbar,
+.invoice-filter,
+.positions-asof {
+    margin-bottom: 15px;
+}
+
+.billing-toolbar .form-group,
+.account-toolbar .form-group {
+    margin-right: 10px;
+}
+
+.invoice-filter input {
+    width: 320px;
+}
+
+.invoice-table td,
+.invoice-table th {
+    white-space: nowrap;
+}
+
+.run-header dd,
+.household-header dd {
+    margin-bottom: 4px;
+}
+
+.tier-summary span {
+    white-space: nowrap;
+}
+
+.tier-table input {
+    max-width: 160px;
+}
+
+.positions-row > td {
+    background-color: #f9f9f9;
+    border-top: none !important;
+}
+
+.positions-table {
+    margin-bottom: 0;
+    background-color: #fff;
+}
+
+.fb-spin {
+    -webkit-animation: fb-spin 1s linear infinite;
+    animation: fb-spin 1s linear infinite;
+}
+
+@-webkit-keyframes fb-spin {
+    from { -webkit-transform: rotate(0deg); }
+    to { -webkit-transform: rotate(360deg); }
+}
+
+@keyframes fb-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}

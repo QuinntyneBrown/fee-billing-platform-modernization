@@ -1,0 +1,858 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="3.0" xmlns:edmx="http://schemas.microsoft.com/ado/2009/11/edmx">
+  <!-- EF Runtime content -->
+  <edmx:Runtime>
+    <!-- SSDL content -->
+    <edmx:StorageModels>
+      <Schema Namespace="FeeBillingModel.Store" Provider="System.Data.SqlClient" ProviderManifestToken="2012" Alias="Self" xmlns:store="http://schemas.microsoft.com/ado/2007/12/edm/EntityStoreSchemaGenerator" xmlns:customannotation="http://schemas.microsoft.com/ado/2013/11/edm/customannotation" xmlns="http://schemas.microsoft.com/ado/2009/11/edm/ssdl">
+        <EntityType Name="Accounts">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="FirmId" Type="int" Nullable="false" />
+          <Property Name="AccountNumber" Type="varchar" MaxLength="12" Nullable="false" />
+          <Property Name="AccountName" Type="nvarchar" MaxLength="200" Nullable="false" />
+          <Property Name="CustodianCode" Type="varchar" MaxLength="10" Nullable="false" />
+          <Property Name="Currency" Type="char" MaxLength="3" Nullable="false" />
+          <Property Name="HouseholdId" Type="int" />
+          <Property Name="FeeScheduleId" Type="int" />
+          <Property Name="OpenedOn" Type="date" Nullable="false" />
+          <Property Name="ClosedOn" Type="date" />
+          <Property Name="IsActive" Type="bit" Nullable="false" />
+          <Property Name="LastValuedAt" Type="datetime2" Precision="0" />
+          <Property Name="CreatedOn" Type="datetime" Nullable="false" />
+        </EntityType>
+        <EntityType Name="AppUsers">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="UserName" Type="nvarchar" MaxLength="100" Nullable="false" />
+          <Property Name="Email" Type="nvarchar" MaxLength="256" />
+          <Property Name="PasswordHash" Type="varchar" MaxLength="100" Nullable="false" />
+          <Property Name="PasswordSalt" Type="varchar" MaxLength="50" Nullable="false" />
+          <Property Name="FirmId" Type="int" />
+          <Property Name="IsLockedOut" Type="bit" Nullable="false" />
+          <Property Name="LastLoginOn" Type="datetime" />
+          <Property Name="CreatedOn" Type="datetime" Nullable="false" />
+        </EntityType>
+        <EntityType Name="BillingRunQueue">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="FirmId" Type="int" Nullable="false" />
+          <Property Name="PeriodEnd" Type="date" Nullable="false" />
+          <Property Name="Status" Type="varchar" MaxLength="20" Nullable="false" />
+          <Property Name="RequestedBy" Type="nvarchar" MaxLength="100" />
+          <Property Name="RequestedOn" Type="datetime" Nullable="false" />
+          <Property Name="StartedOn" Type="datetime" />
+          <Property Name="CompletedOn" Type="datetime" />
+          <Property Name="ErrorMessage" Type="nvarchar(max)" />
+        </EntityType>
+        <EntityType Name="CashFlows">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="AccountId" Type="int" Nullable="false" />
+          <Property Name="FlowDate" Type="date" Nullable="false" />
+          <Property Name="Amount" Type="decimal" Precision="19" Scale="2" Nullable="false" />
+          <Property Name="FlowType" Type="varchar" MaxLength="20" Nullable="false" />
+        </EntityType>
+        <EntityType Name="FeeDebits">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="InvoiceId" Type="int" Nullable="false" />
+          <Property Name="CustodianCode" Type="varchar" MaxLength="10" Nullable="false" />
+          <Property Name="DebitedAmount" Type="decimal" Precision="19" Scale="2" Nullable="false" />
+          <Property Name="DebitedOn" Type="date" Nullable="false" />
+          <Property Name="CustodianReference" Type="varchar" MaxLength="50" />
+        </EntityType>
+        <EntityType Name="FeeSchedules">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="FirmId" Type="int" />
+          <Property Name="Code" Type="varchar" MaxLength="20" Nullable="false" />
+          <Property Name="Name" Type="nvarchar" MaxLength="100" Nullable="false" />
+          <Property Name="ScheduleType" Type="varchar" MaxLength="20" Nullable="false" />
+          <Property Name="IsHousehold" Type="bit" Nullable="false" />
+          <Property Name="MinimumAnnualFee" Type="decimal" Precision="19" Scale="2" Nullable="false" />
+          <Property Name="FlatAnnualFee" Type="decimal" Precision="19" Scale="2" />
+          <Property Name="Currency" Type="char" MaxLength="3" Nullable="false" />
+          <Property Name="IsActive" Type="bit" Nullable="false" />
+          <Property Name="CreatedOn" Type="datetime" Nullable="false" />
+          <Property Name="ModifiedOn" Type="datetime" />
+          <Property Name="ModifiedBy" Type="nvarchar" MaxLength="100" />
+        </EntityType>
+        <EntityType Name="FeeTiers">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="FeeScheduleId" Type="int" Nullable="false" />
+          <Property Name="LowerBound" Type="decimal" Precision="19" Scale="2" Nullable="false" />
+          <Property Name="UpperBound" Type="decimal" Precision="19" Scale="2" />
+          <Property Name="AnnualRate" Type="decimal" Precision="9" Scale="6" Nullable="false" />
+        </EntityType>
+        <EntityType Name="FirmBillingExclusions">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="FirmId" Type="int" Nullable="false" />
+          <Property Name="SecurityCode" Type="varchar" MaxLength="20" Nullable="false" />
+          <Property Name="Reason" Type="nvarchar" MaxLength="200" />
+        </EntityType>
+        <EntityType Name="Firms">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="FirmCode" Type="varchar" MaxLength="20" Nullable="false" />
+          <Property Name="Name" Type="nvarchar" MaxLength="200" Nullable="false" />
+          <Property Name="Province" Type="char" MaxLength="2" />
+          <Property Name="Culture" Type="varchar" MaxLength="10" Nullable="false" />
+          <Property Name="IsActive" Type="bit" Nullable="false" />
+          <Property Name="CreatedOn" Type="datetime" Nullable="false" />
+        </EntityType>
+        <EntityType Name="Households">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="FirmId" Type="int" Nullable="false" />
+          <Property Name="HouseholdCode" Type="varchar" MaxLength="20" Nullable="false" />
+          <Property Name="Name" Type="nvarchar" MaxLength="200" Nullable="false" />
+          <Property Name="FeeScheduleId" Type="int" />
+          <Property Name="CreatedOn" Type="datetime" Nullable="false" />
+        </EntityType>
+        <EntityType Name="Invoices">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="RunId" Type="int" Nullable="false" />
+          <Property Name="AccountId" Type="int" Nullable="false" />
+          <Property Name="HouseholdId" Type="int" />
+          <Property Name="Amount" Type="decimal" Precision="19" Scale="2" Nullable="false" />
+          <!-- Set to Computed so inserts pick up the column DEFAULTs (FB-311). -->
+          <Property Name="InvoiceDate" Type="datetime" StoreGeneratedPattern="Computed" Nullable="false" />
+          <Property Name="Status" Type="varchar" MaxLength="20" StoreGeneratedPattern="Computed" Nullable="false" />
+          <Property Name="ApprovedBy" Type="nvarchar" MaxLength="100" />
+          <Property Name="ApprovedOn" Type="datetime" />
+        </EntityType>
+        <EntityType Name="Positions">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="bigint" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="AccountId" Type="int" Nullable="false" />
+          <Property Name="AsOfDate" Type="date" Nullable="false" />
+          <Property Name="SecurityCode" Type="varchar" MaxLength="20" Nullable="false" />
+          <Property Name="SecurityName" Type="nvarchar" MaxLength="200" />
+          <Property Name="Quantity" Type="decimal" Precision="19" Scale="4" Nullable="false" />
+          <Property Name="MarketValue" Type="decimal" Precision="19" Scale="4" Nullable="false" />
+          <Property Name="IsCashSleeve" Type="bit" Nullable="false" />
+          <Property Name="SourceBatchId" Type="int" />
+        </EntityType>
+        <EntityType Name="StagedBatches">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="int" StoreGeneratedPattern="Identity" Nullable="false" />
+          <Property Name="CustodianCode" Type="varchar" MaxLength="10" />
+          <Property Name="FileName" Type="nvarchar" MaxLength="260" />
+          <Property Name="Payload" Type="varbinary(max)" Nullable="false" />
+          <Property Name="Status" Type="varchar" MaxLength="20" Nullable="false" />
+          <Property Name="ReceivedOn" Type="datetime" StoreGeneratedPattern="Computed" Nullable="false" />
+          <Property Name="ProcessedOn" Type="datetime" />
+        </EntityType>
+        <Association Name="FK_Accounts_FeeSchedules">
+          <End Role="FeeSchedules" Type="Self.FeeSchedules" Multiplicity="0..1" />
+          <End Role="Accounts" Type="Self.Accounts" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="FeeSchedules">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Accounts">
+              <PropertyRef Name="FeeScheduleId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Accounts_Firms">
+          <End Role="Firms" Type="Self.Firms" Multiplicity="1" />
+          <End Role="Accounts" Type="Self.Accounts" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="Firms">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Accounts">
+              <PropertyRef Name="FirmId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Accounts_Households">
+          <End Role="Households" Type="Self.Households" Multiplicity="0..1" />
+          <End Role="Accounts" Type="Self.Accounts" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="Households">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Accounts">
+              <PropertyRef Name="HouseholdId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_FeeTiers_FeeSchedules">
+          <End Role="FeeSchedules" Type="Self.FeeSchedules" Multiplicity="1" />
+          <End Role="FeeTiers" Type="Self.FeeTiers" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="FeeSchedules">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="FeeTiers">
+              <PropertyRef Name="FeeScheduleId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Households_FeeSchedules">
+          <End Role="FeeSchedules" Type="Self.FeeSchedules" Multiplicity="0..1" />
+          <End Role="Households" Type="Self.Households" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="FeeSchedules">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Households">
+              <PropertyRef Name="FeeScheduleId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Invoices_Accounts">
+          <End Role="Accounts" Type="Self.Accounts" Multiplicity="1" />
+          <End Role="Invoices" Type="Self.Invoices" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="Accounts">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Invoices">
+              <PropertyRef Name="AccountId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Invoices_BillingRunQueue">
+          <End Role="BillingRunQueue" Type="Self.BillingRunQueue" Multiplicity="1" />
+          <End Role="Invoices" Type="Self.Invoices" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="BillingRunQueue">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Invoices">
+              <PropertyRef Name="RunId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Positions_Accounts">
+          <End Role="Accounts" Type="Self.Accounts" Multiplicity="1" />
+          <End Role="Positions" Type="Self.Positions" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="Accounts">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Positions">
+              <PropertyRef Name="AccountId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <EntityContainer Name="FeeBillingModelStoreContainer">
+          <EntitySet Name="Accounts" EntityType="Self.Accounts" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="AppUsers" EntityType="Self.AppUsers" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="BillingRunQueue" EntityType="Self.BillingRunQueue" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="CashFlows" EntityType="Self.CashFlows" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="FeeDebits" EntityType="Self.FeeDebits" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="FeeSchedules" EntityType="Self.FeeSchedules" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="FeeTiers" EntityType="Self.FeeTiers" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="FirmBillingExclusions" EntityType="Self.FirmBillingExclusions" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="Firms" EntityType="Self.Firms" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="Households" EntityType="Self.Households" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="Invoices" EntityType="Self.Invoices" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="Positions" EntityType="Self.Positions" Schema="dbo" store:Type="Tables" />
+          <EntitySet Name="StagedBatches" EntityType="Self.StagedBatches" Schema="dbo" store:Type="Tables" />
+          <AssociationSet Name="FK_Accounts_FeeSchedules" Association="Self.FK_Accounts_FeeSchedules">
+            <End Role="FeeSchedules" EntitySet="FeeSchedules" />
+            <End Role="Accounts" EntitySet="Accounts" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Accounts_Firms" Association="Self.FK_Accounts_Firms">
+            <End Role="Firms" EntitySet="Firms" />
+            <End Role="Accounts" EntitySet="Accounts" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Accounts_Households" Association="Self.FK_Accounts_Households">
+            <End Role="Households" EntitySet="Households" />
+            <End Role="Accounts" EntitySet="Accounts" />
+          </AssociationSet>
+          <AssociationSet Name="FK_FeeTiers_FeeSchedules" Association="Self.FK_FeeTiers_FeeSchedules">
+            <End Role="FeeSchedules" EntitySet="FeeSchedules" />
+            <End Role="FeeTiers" EntitySet="FeeTiers" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Households_FeeSchedules" Association="Self.FK_Households_FeeSchedules">
+            <End Role="FeeSchedules" EntitySet="FeeSchedules" />
+            <End Role="Households" EntitySet="Households" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Invoices_Accounts" Association="Self.FK_Invoices_Accounts">
+            <End Role="Accounts" EntitySet="Accounts" />
+            <End Role="Invoices" EntitySet="Invoices" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Invoices_BillingRunQueue" Association="Self.FK_Invoices_BillingRunQueue">
+            <End Role="BillingRunQueue" EntitySet="BillingRunQueue" />
+            <End Role="Invoices" EntitySet="Invoices" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Positions_Accounts" Association="Self.FK_Positions_Accounts">
+            <End Role="Accounts" EntitySet="Accounts" />
+            <End Role="Positions" EntitySet="Positions" />
+          </AssociationSet>
+        </EntityContainer>
+      </Schema>
+    </edmx:StorageModels>
+    <!-- CSDL content -->
+    <edmx:ConceptualModels>
+      <Schema Namespace="FeeBillingModel" Alias="Self" annotation:UseStrongSpatialTypes="false" xmlns:annotation="http://schemas.microsoft.com/ado/2009/02/edm/annotation" xmlns:customannotation="http://schemas.microsoft.com/ado/2013/11/edm/customannotation" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+        <EntityType Name="Account">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="FirmId" Type="Int32" Nullable="false" />
+          <Property Name="AccountNumber" Type="String" MaxLength="12" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="AccountName" Type="String" MaxLength="200" FixedLength="false" Unicode="true" Nullable="false" />
+          <Property Name="CustodianCode" Type="String" MaxLength="10" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="Currency" Type="String" MaxLength="3" FixedLength="true" Unicode="false" Nullable="false" />
+          <Property Name="HouseholdId" Type="Int32" />
+          <Property Name="FeeScheduleId" Type="Int32" />
+          <Property Name="OpenedOn" Type="DateTime" Nullable="false" Precision="0" />
+          <Property Name="ClosedOn" Type="DateTime" Precision="0" />
+          <Property Name="IsActive" Type="Boolean" Nullable="false" />
+          <Property Name="LastValuedAt" Type="DateTime" Precision="0" />
+          <Property Name="CreatedOn" Type="DateTime" Nullable="false" Precision="3" />
+          <NavigationProperty Name="FeeSchedule" Relationship="Self.FK_Accounts_FeeSchedules" FromRole="Accounts" ToRole="FeeSchedules" />
+          <NavigationProperty Name="Firm" Relationship="Self.FK_Accounts_Firms" FromRole="Accounts" ToRole="Firms" />
+          <NavigationProperty Name="Household" Relationship="Self.FK_Accounts_Households" FromRole="Accounts" ToRole="Households" />
+          <NavigationProperty Name="Invoices" Relationship="Self.FK_Invoices_Accounts" FromRole="Accounts" ToRole="Invoices" />
+          <NavigationProperty Name="Positions" Relationship="Self.FK_Positions_Accounts" FromRole="Accounts" ToRole="Positions" />
+        </EntityType>
+        <EntityType Name="AppUser">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="UserName" Type="String" MaxLength="100" FixedLength="false" Unicode="true" Nullable="false" />
+          <Property Name="Email" Type="String" MaxLength="256" FixedLength="false" Unicode="true" />
+          <Property Name="PasswordHash" Type="String" MaxLength="100" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="PasswordSalt" Type="String" MaxLength="50" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="FirmId" Type="Int32" />
+          <Property Name="IsLockedOut" Type="Boolean" Nullable="false" />
+          <Property Name="LastLoginOn" Type="DateTime" Precision="3" />
+          <Property Name="CreatedOn" Type="DateTime" Nullable="false" Precision="3" />
+        </EntityType>
+        <EntityType Name="BillingRunQueueItem">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="FirmId" Type="Int32" Nullable="false" />
+          <Property Name="PeriodEnd" Type="DateTime" Nullable="false" Precision="0" />
+          <Property Name="Status" Type="String" MaxLength="20" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="RequestedBy" Type="String" MaxLength="100" FixedLength="false" Unicode="true" />
+          <Property Name="RequestedOn" Type="DateTime" Nullable="false" Precision="3" />
+          <Property Name="StartedOn" Type="DateTime" Precision="3" />
+          <Property Name="CompletedOn" Type="DateTime" Precision="3" />
+          <Property Name="ErrorMessage" Type="String" MaxLength="Max" FixedLength="false" Unicode="true" />
+          <NavigationProperty Name="Invoices" Relationship="Self.FK_Invoices_BillingRunQueue" FromRole="BillingRunQueue" ToRole="Invoices" />
+        </EntityType>
+        <EntityType Name="CashFlow">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="AccountId" Type="Int32" Nullable="false" />
+          <Property Name="FlowDate" Type="DateTime" Nullable="false" Precision="0" />
+          <Property Name="Amount" Type="Decimal" Precision="19" Scale="2" Nullable="false" />
+          <Property Name="FlowType" Type="String" MaxLength="20" FixedLength="false" Unicode="false" Nullable="false" />
+        </EntityType>
+        <EntityType Name="FeeDebit">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="InvoiceId" Type="Int32" Nullable="false" />
+          <Property Name="CustodianCode" Type="String" MaxLength="10" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="DebitedAmount" Type="Decimal" Precision="19" Scale="2" Nullable="false" />
+          <Property Name="DebitedOn" Type="DateTime" Nullable="false" Precision="0" />
+          <Property Name="CustodianReference" Type="String" MaxLength="50" FixedLength="false" Unicode="false" />
+        </EntityType>
+        <EntityType Name="FeeSchedule">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="FirmId" Type="Int32" />
+          <Property Name="Code" Type="String" MaxLength="20" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="Name" Type="String" MaxLength="100" FixedLength="false" Unicode="true" Nullable="false" />
+          <Property Name="ScheduleType" Type="String" MaxLength="20" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="IsHousehold" Type="Boolean" Nullable="false" />
+          <Property Name="MinimumAnnualFee" Type="Decimal" Precision="19" Scale="2" Nullable="false" />
+          <Property Name="FlatAnnualFee" Type="Decimal" Precision="19" Scale="2" />
+          <Property Name="Currency" Type="String" MaxLength="3" FixedLength="true" Unicode="false" Nullable="false" />
+          <Property Name="IsActive" Type="Boolean" Nullable="false" />
+          <Property Name="CreatedOn" Type="DateTime" Nullable="false" Precision="3" />
+          <Property Name="ModifiedOn" Type="DateTime" Precision="3" />
+          <Property Name="ModifiedBy" Type="String" MaxLength="100" FixedLength="false" Unicode="true" />
+          <NavigationProperty Name="Accounts" Relationship="Self.FK_Accounts_FeeSchedules" FromRole="FeeSchedules" ToRole="Accounts" />
+          <NavigationProperty Name="Tiers" Relationship="Self.FK_FeeTiers_FeeSchedules" FromRole="FeeSchedules" ToRole="FeeTiers" />
+          <NavigationProperty Name="Households" Relationship="Self.FK_Households_FeeSchedules" FromRole="FeeSchedules" ToRole="Households" />
+        </EntityType>
+        <EntityType Name="FeeTier">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="FeeScheduleId" Type="Int32" Nullable="false" />
+          <Property Name="LowerBound" Type="Decimal" Precision="19" Scale="2" Nullable="false" />
+          <Property Name="UpperBound" Type="Decimal" Precision="19" Scale="2" />
+          <Property Name="AnnualRate" Type="Decimal" Precision="9" Scale="6" Nullable="false" />
+          <NavigationProperty Name="FeeSchedule" Relationship="Self.FK_FeeTiers_FeeSchedules" FromRole="FeeTiers" ToRole="FeeSchedules" />
+        </EntityType>
+        <EntityType Name="FirmBillingExclusion">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="FirmId" Type="Int32" Nullable="false" />
+          <Property Name="SecurityCode" Type="String" MaxLength="20" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="Reason" Type="String" MaxLength="200" FixedLength="false" Unicode="true" />
+        </EntityType>
+        <EntityType Name="Firm">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="FirmCode" Type="String" MaxLength="20" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="Name" Type="String" MaxLength="200" FixedLength="false" Unicode="true" Nullable="false" />
+          <Property Name="Province" Type="String" MaxLength="2" FixedLength="true" Unicode="false" />
+          <Property Name="Culture" Type="String" MaxLength="10" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="IsActive" Type="Boolean" Nullable="false" />
+          <Property Name="CreatedOn" Type="DateTime" Nullable="false" Precision="3" />
+          <NavigationProperty Name="Accounts" Relationship="Self.FK_Accounts_Firms" FromRole="Firms" ToRole="Accounts" />
+        </EntityType>
+        <EntityType Name="Household">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="FirmId" Type="Int32" Nullable="false" />
+          <Property Name="HouseholdCode" Type="String" MaxLength="20" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="Name" Type="String" MaxLength="200" FixedLength="false" Unicode="true" Nullable="false" />
+          <Property Name="FeeScheduleId" Type="Int32" />
+          <Property Name="CreatedOn" Type="DateTime" Nullable="false" Precision="3" />
+          <NavigationProperty Name="Accounts" Relationship="Self.FK_Accounts_Households" FromRole="Households" ToRole="Accounts" />
+          <NavigationProperty Name="FeeSchedule" Relationship="Self.FK_Households_FeeSchedules" FromRole="Households" ToRole="FeeSchedules" />
+        </EntityType>
+        <EntityType Name="Invoice">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="RunId" Type="Int32" Nullable="false" />
+          <Property Name="AccountId" Type="Int32" Nullable="false" />
+          <Property Name="HouseholdId" Type="Int32" />
+          <Property Name="Amount" Type="Decimal" Precision="19" Scale="2" Nullable="false" />
+          <Property Name="InvoiceDate" Type="DateTime" Nullable="false" Precision="3" annotation:StoreGeneratedPattern="Computed" />
+          <Property Name="Status" Type="String" MaxLength="20" FixedLength="false" Unicode="false" Nullable="false" annotation:StoreGeneratedPattern="Computed" />
+          <Property Name="ApprovedBy" Type="String" MaxLength="100" FixedLength="false" Unicode="true" />
+          <Property Name="ApprovedOn" Type="DateTime" Precision="3" />
+          <NavigationProperty Name="Account" Relationship="Self.FK_Invoices_Accounts" FromRole="Invoices" ToRole="Accounts" />
+          <NavigationProperty Name="BillingRun" Relationship="Self.FK_Invoices_BillingRunQueue" FromRole="Invoices" ToRole="BillingRunQueue" />
+        </EntityType>
+        <EntityType Name="Position">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int64" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="AccountId" Type="Int32" Nullable="false" />
+          <Property Name="AsOfDate" Type="DateTime" Nullable="false" Precision="0" />
+          <Property Name="SecurityCode" Type="String" MaxLength="20" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="SecurityName" Type="String" MaxLength="200" FixedLength="false" Unicode="true" />
+          <Property Name="Quantity" Type="Decimal" Precision="19" Scale="4" Nullable="false" />
+          <Property Name="MarketValue" Type="Decimal" Precision="19" Scale="4" Nullable="false" />
+          <Property Name="IsCashSleeve" Type="Boolean" Nullable="false" />
+          <Property Name="SourceBatchId" Type="Int32" />
+          <NavigationProperty Name="Account" Relationship="Self.FK_Positions_Accounts" FromRole="Positions" ToRole="Accounts" />
+        </EntityType>
+        <EntityType Name="StagedBatch">
+          <Key>
+            <PropertyRef Name="Id" />
+          </Key>
+          <Property Name="Id" Type="Int32" Nullable="false" annotation:StoreGeneratedPattern="Identity" />
+          <Property Name="CustodianCode" Type="String" MaxLength="10" FixedLength="false" Unicode="false" />
+          <Property Name="FileName" Type="String" MaxLength="260" FixedLength="false" Unicode="true" />
+          <Property Name="Payload" Type="Binary" MaxLength="Max" FixedLength="false" Nullable="false" />
+          <Property Name="Status" Type="String" MaxLength="20" FixedLength="false" Unicode="false" Nullable="false" />
+          <Property Name="ReceivedOn" Type="DateTime" Nullable="false" Precision="3" annotation:StoreGeneratedPattern="Computed" />
+          <Property Name="ProcessedOn" Type="DateTime" Precision="3" />
+        </EntityType>
+        <Association Name="FK_Accounts_FeeSchedules">
+          <End Role="FeeSchedules" Type="Self.FeeSchedule" Multiplicity="0..1" />
+          <End Role="Accounts" Type="Self.Account" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="FeeSchedules">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Accounts">
+              <PropertyRef Name="FeeScheduleId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Accounts_Firms">
+          <End Role="Firms" Type="Self.Firm" Multiplicity="1" />
+          <End Role="Accounts" Type="Self.Account" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="Firms">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Accounts">
+              <PropertyRef Name="FirmId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Accounts_Households">
+          <End Role="Households" Type="Self.Household" Multiplicity="0..1" />
+          <End Role="Accounts" Type="Self.Account" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="Households">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Accounts">
+              <PropertyRef Name="HouseholdId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_FeeTiers_FeeSchedules">
+          <End Role="FeeSchedules" Type="Self.FeeSchedule" Multiplicity="1" />
+          <End Role="FeeTiers" Type="Self.FeeTier" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="FeeSchedules">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="FeeTiers">
+              <PropertyRef Name="FeeScheduleId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Households_FeeSchedules">
+          <End Role="FeeSchedules" Type="Self.FeeSchedule" Multiplicity="0..1" />
+          <End Role="Households" Type="Self.Household" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="FeeSchedules">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Households">
+              <PropertyRef Name="FeeScheduleId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Invoices_Accounts">
+          <End Role="Accounts" Type="Self.Account" Multiplicity="1" />
+          <End Role="Invoices" Type="Self.Invoice" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="Accounts">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Invoices">
+              <PropertyRef Name="AccountId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Invoices_BillingRunQueue">
+          <End Role="BillingRunQueue" Type="Self.BillingRunQueueItem" Multiplicity="1" />
+          <End Role="Invoices" Type="Self.Invoice" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="BillingRunQueue">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Invoices">
+              <PropertyRef Name="RunId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <Association Name="FK_Positions_Accounts">
+          <End Role="Accounts" Type="Self.Account" Multiplicity="1" />
+          <End Role="Positions" Type="Self.Position" Multiplicity="*" />
+          <ReferentialConstraint>
+            <Principal Role="Accounts">
+              <PropertyRef Name="Id" />
+            </Principal>
+            <Dependent Role="Positions">
+              <PropertyRef Name="AccountId" />
+            </Dependent>
+          </ReferentialConstraint>
+        </Association>
+        <EntityContainer Name="FeeBillingEntities" annotation:LazyLoadingEnabled="true">
+          <EntitySet Name="Accounts" EntityType="Self.Account" />
+          <EntitySet Name="AppUsers" EntityType="Self.AppUser" />
+          <EntitySet Name="BillingRunQueue" EntityType="Self.BillingRunQueueItem" />
+          <EntitySet Name="CashFlows" EntityType="Self.CashFlow" />
+          <EntitySet Name="FeeDebits" EntityType="Self.FeeDebit" />
+          <EntitySet Name="FeeSchedules" EntityType="Self.FeeSchedule" />
+          <EntitySet Name="FeeTiers" EntityType="Self.FeeTier" />
+          <EntitySet Name="FirmBillingExclusions" EntityType="Self.FirmBillingExclusion" />
+          <EntitySet Name="Firms" EntityType="Self.Firm" />
+          <EntitySet Name="Households" EntityType="Self.Household" />
+          <EntitySet Name="Invoices" EntityType="Self.Invoice" />
+          <EntitySet Name="Positions" EntityType="Self.Position" />
+          <EntitySet Name="StagedBatches" EntityType="Self.StagedBatch" />
+          <AssociationSet Name="FK_Accounts_FeeSchedules" Association="Self.FK_Accounts_FeeSchedules">
+            <End Role="FeeSchedules" EntitySet="FeeSchedules" />
+            <End Role="Accounts" EntitySet="Accounts" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Accounts_Firms" Association="Self.FK_Accounts_Firms">
+            <End Role="Firms" EntitySet="Firms" />
+            <End Role="Accounts" EntitySet="Accounts" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Accounts_Households" Association="Self.FK_Accounts_Households">
+            <End Role="Households" EntitySet="Households" />
+            <End Role="Accounts" EntitySet="Accounts" />
+          </AssociationSet>
+          <AssociationSet Name="FK_FeeTiers_FeeSchedules" Association="Self.FK_FeeTiers_FeeSchedules">
+            <End Role="FeeSchedules" EntitySet="FeeSchedules" />
+            <End Role="FeeTiers" EntitySet="FeeTiers" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Households_FeeSchedules" Association="Self.FK_Households_FeeSchedules">
+            <End Role="FeeSchedules" EntitySet="FeeSchedules" />
+            <End Role="Households" EntitySet="Households" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Invoices_Accounts" Association="Self.FK_Invoices_Accounts">
+            <End Role="Accounts" EntitySet="Accounts" />
+            <End Role="Invoices" EntitySet="Invoices" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Invoices_BillingRunQueue" Association="Self.FK_Invoices_BillingRunQueue">
+            <End Role="BillingRunQueue" EntitySet="BillingRunQueue" />
+            <End Role="Invoices" EntitySet="Invoices" />
+          </AssociationSet>
+          <AssociationSet Name="FK_Positions_Accounts" Association="Self.FK_Positions_Accounts">
+            <End Role="Accounts" EntitySet="Accounts" />
+            <End Role="Positions" EntitySet="Positions" />
+          </AssociationSet>
+        </EntityContainer>
+      </Schema>
+    </edmx:ConceptualModels>
+    <!-- C-S mapping content -->
+    <edmx:Mappings>
+      <Mapping Space="C-S" xmlns="http://schemas.microsoft.com/ado/2009/11/mapping/cs">
+        <EntityContainerMapping StorageEntityContainer="FeeBillingModelStoreContainer" CdmEntityContainer="FeeBillingEntities">
+          <EntitySetMapping Name="Accounts">
+            <EntityTypeMapping TypeName="FeeBillingModel.Account">
+              <MappingFragment StoreEntitySet="Accounts">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="FirmId" ColumnName="FirmId" />
+                <ScalarProperty Name="AccountNumber" ColumnName="AccountNumber" />
+                <ScalarProperty Name="AccountName" ColumnName="AccountName" />
+                <ScalarProperty Name="CustodianCode" ColumnName="CustodianCode" />
+                <ScalarProperty Name="Currency" ColumnName="Currency" />
+                <ScalarProperty Name="HouseholdId" ColumnName="HouseholdId" />
+                <ScalarProperty Name="FeeScheduleId" ColumnName="FeeScheduleId" />
+                <ScalarProperty Name="OpenedOn" ColumnName="OpenedOn" />
+                <ScalarProperty Name="ClosedOn" ColumnName="ClosedOn" />
+                <ScalarProperty Name="IsActive" ColumnName="IsActive" />
+                <ScalarProperty Name="LastValuedAt" ColumnName="LastValuedAt" />
+                <ScalarProperty Name="CreatedOn" ColumnName="CreatedOn" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="AppUsers">
+            <EntityTypeMapping TypeName="FeeBillingModel.AppUser">
+              <MappingFragment StoreEntitySet="AppUsers">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="UserName" ColumnName="UserName" />
+                <ScalarProperty Name="Email" ColumnName="Email" />
+                <ScalarProperty Name="PasswordHash" ColumnName="PasswordHash" />
+                <ScalarProperty Name="PasswordSalt" ColumnName="PasswordSalt" />
+                <ScalarProperty Name="FirmId" ColumnName="FirmId" />
+                <ScalarProperty Name="IsLockedOut" ColumnName="IsLockedOut" />
+                <ScalarProperty Name="LastLoginOn" ColumnName="LastLoginOn" />
+                <ScalarProperty Name="CreatedOn" ColumnName="CreatedOn" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="BillingRunQueue">
+            <EntityTypeMapping TypeName="FeeBillingModel.BillingRunQueueItem">
+              <MappingFragment StoreEntitySet="BillingRunQueue">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="FirmId" ColumnName="FirmId" />
+                <ScalarProperty Name="PeriodEnd" ColumnName="PeriodEnd" />
+                <ScalarProperty Name="Status" ColumnName="Status" />
+                <ScalarProperty Name="RequestedBy" ColumnName="RequestedBy" />
+                <ScalarProperty Name="RequestedOn" ColumnName="RequestedOn" />
+                <ScalarProperty Name="StartedOn" ColumnName="StartedOn" />
+                <ScalarProperty Name="CompletedOn" ColumnName="CompletedOn" />
+                <ScalarProperty Name="ErrorMessage" ColumnName="ErrorMessage" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="CashFlows">
+            <EntityTypeMapping TypeName="FeeBillingModel.CashFlow">
+              <MappingFragment StoreEntitySet="CashFlows">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="AccountId" ColumnName="AccountId" />
+                <ScalarProperty Name="FlowDate" ColumnName="FlowDate" />
+                <ScalarProperty Name="Amount" ColumnName="Amount" />
+                <ScalarProperty Name="FlowType" ColumnName="FlowType" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="FeeDebits">
+            <EntityTypeMapping TypeName="FeeBillingModel.FeeDebit">
+              <MappingFragment StoreEntitySet="FeeDebits">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="InvoiceId" ColumnName="InvoiceId" />
+                <ScalarProperty Name="CustodianCode" ColumnName="CustodianCode" />
+                <ScalarProperty Name="DebitedAmount" ColumnName="DebitedAmount" />
+                <ScalarProperty Name="DebitedOn" ColumnName="DebitedOn" />
+                <ScalarProperty Name="CustodianReference" ColumnName="CustodianReference" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="FeeSchedules">
+            <EntityTypeMapping TypeName="FeeBillingModel.FeeSchedule">
+              <MappingFragment StoreEntitySet="FeeSchedules">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="FirmId" ColumnName="FirmId" />
+                <ScalarProperty Name="Code" ColumnName="Code" />
+                <ScalarProperty Name="Name" ColumnName="Name" />
+                <ScalarProperty Name="ScheduleType" ColumnName="ScheduleType" />
+                <ScalarProperty Name="IsHousehold" ColumnName="IsHousehold" />
+                <ScalarProperty Name="MinimumAnnualFee" ColumnName="MinimumAnnualFee" />
+                <ScalarProperty Name="FlatAnnualFee" ColumnName="FlatAnnualFee" />
+                <ScalarProperty Name="Currency" ColumnName="Currency" />
+                <ScalarProperty Name="IsActive" ColumnName="IsActive" />
+                <ScalarProperty Name="CreatedOn" ColumnName="CreatedOn" />
+                <ScalarProperty Name="ModifiedOn" ColumnName="ModifiedOn" />
+                <ScalarProperty Name="ModifiedBy" ColumnName="ModifiedBy" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="FeeTiers">
+            <EntityTypeMapping TypeName="FeeBillingModel.FeeTier">
+              <MappingFragment StoreEntitySet="FeeTiers">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="FeeScheduleId" ColumnName="FeeScheduleId" />
+                <ScalarProperty Name="LowerBound" ColumnName="LowerBound" />
+                <ScalarProperty Name="UpperBound" ColumnName="UpperBound" />
+                <ScalarProperty Name="AnnualRate" ColumnName="AnnualRate" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="FirmBillingExclusions">
+            <EntityTypeMapping TypeName="FeeBillingModel.FirmBillingExclusion">
+              <MappingFragment StoreEntitySet="FirmBillingExclusions">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="FirmId" ColumnName="FirmId" />
+                <ScalarProperty Name="SecurityCode" ColumnName="SecurityCode" />
+                <ScalarProperty Name="Reason" ColumnName="Reason" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="Firms">
+            <EntityTypeMapping TypeName="FeeBillingModel.Firm">
+              <MappingFragment StoreEntitySet="Firms">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="FirmCode" ColumnName="FirmCode" />
+                <ScalarProperty Name="Name" ColumnName="Name" />
+                <ScalarProperty Name="Province" ColumnName="Province" />
+                <ScalarProperty Name="Culture" ColumnName="Culture" />
+                <ScalarProperty Name="IsActive" ColumnName="IsActive" />
+                <ScalarProperty Name="CreatedOn" ColumnName="CreatedOn" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="Households">
+            <EntityTypeMapping TypeName="FeeBillingModel.Household">
+              <MappingFragment StoreEntitySet="Households">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="FirmId" ColumnName="FirmId" />
+                <ScalarProperty Name="HouseholdCode" ColumnName="HouseholdCode" />
+                <ScalarProperty Name="Name" ColumnName="Name" />
+                <ScalarProperty Name="FeeScheduleId" ColumnName="FeeScheduleId" />
+                <ScalarProperty Name="CreatedOn" ColumnName="CreatedOn" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="Invoices">
+            <EntityTypeMapping TypeName="FeeBillingModel.Invoice">
+              <MappingFragment StoreEntitySet="Invoices">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="RunId" ColumnName="RunId" />
+                <ScalarProperty Name="AccountId" ColumnName="AccountId" />
+                <ScalarProperty Name="HouseholdId" ColumnName="HouseholdId" />
+                <ScalarProperty Name="Amount" ColumnName="Amount" />
+                <ScalarProperty Name="InvoiceDate" ColumnName="InvoiceDate" />
+                <ScalarProperty Name="Status" ColumnName="Status" />
+                <ScalarProperty Name="ApprovedBy" ColumnName="ApprovedBy" />
+                <ScalarProperty Name="ApprovedOn" ColumnName="ApprovedOn" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="Positions">
+            <EntityTypeMapping TypeName="FeeBillingModel.Position">
+              <MappingFragment StoreEntitySet="Positions">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="AccountId" ColumnName="AccountId" />
+                <ScalarProperty Name="AsOfDate" ColumnName="AsOfDate" />
+                <ScalarProperty Name="SecurityCode" ColumnName="SecurityCode" />
+                <ScalarProperty Name="SecurityName" ColumnName="SecurityName" />
+                <ScalarProperty Name="Quantity" ColumnName="Quantity" />
+                <ScalarProperty Name="MarketValue" ColumnName="MarketValue" />
+                <ScalarProperty Name="IsCashSleeve" ColumnName="IsCashSleeve" />
+                <ScalarProperty Name="SourceBatchId" ColumnName="SourceBatchId" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+          <EntitySetMapping Name="StagedBatches">
+            <EntityTypeMapping TypeName="FeeBillingModel.StagedBatch">
+              <MappingFragment StoreEntitySet="StagedBatches">
+                <ScalarProperty Name="Id" ColumnName="Id" />
+                <ScalarProperty Name="CustodianCode" ColumnName="CustodianCode" />
+                <ScalarProperty Name="FileName" ColumnName="FileName" />
+                <ScalarProperty Name="Payload" ColumnName="Payload" />
+                <ScalarProperty Name="Status" ColumnName="Status" />
+                <ScalarProperty Name="ReceivedOn" ColumnName="ReceivedOn" />
+                <ScalarProperty Name="ProcessedOn" ColumnName="ProcessedOn" />
+              </MappingFragment>
+            </EntityTypeMapping>
+          </EntitySetMapping>
+        </EntityContainerMapping>
+      </Mapping>
+    </edmx:Mappings>
+  </edmx:Runtime>
+  <!-- EF Designer content (DO NOT EDIT MANUALLY BELOW HERE) -->
+  <Designer xmlns="http://schemas.microsoft.com/ado/2009/11/edmx">
+    <Connection>
+      <DesignerInfoPropertySet>
+        <DesignerProperty Name="MetadataArtifactProcessing" Value="EmbedInOutputAssembly" />
+      </DesignerInfoPropertySet>
+    </Connection>
+    <Options>
+      <DesignerInfoPropertySet>
+        <DesignerProperty Name="ValidateOnBuild" Value="true" />
+        <DesignerProperty Name="EnablePluralization" Value="true" />
+        <DesignerProperty Name="IncludeForeignKeysInModel" Value="true" />
+        <DesignerProperty Name="UseLegacyProvider" Value="false" />
+        <DesignerProperty Name="CodeGenerationStrategy" Value="None" />
+      </DesignerInfoPropertySet>
+    </Options>
+    <Diagrams></Diagrams>
+  </Designer>
+</edmx:Edmx>

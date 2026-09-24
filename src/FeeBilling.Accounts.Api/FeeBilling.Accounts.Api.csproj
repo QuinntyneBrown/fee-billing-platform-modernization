@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>FeeBilling.Accounts.Api</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SystemWebAdapters.CoreServices" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FeeBilling.Infrastructure\FeeBilling.Infrastructure.csproj" />
+    <ProjectReference Include="..\FeeBilling.ServiceDefaults\FeeBilling.ServiceDefaults.csproj" />
+  </ItemGroup>
+
+</Project>

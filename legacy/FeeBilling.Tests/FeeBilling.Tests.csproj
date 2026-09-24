@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>FeeBilling.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="MSTest.TestAdapter" Version="2.2.10" />
+    <PackageReference Include="MSTest.TestFramework" Version="2.2.10" />
+    <PackageReference Include="EntityFramework" Version="6.4.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Data" />
+    <Reference Include="System.Web" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FeeBilling.Core\FeeBilling.Core.csproj" />
+    <ProjectReference Include="..\FeeBilling.Data\FeeBilling.Data.csproj" />
+    <ProjectReference Include="..\FeeBilling.Web\FeeBilling.Web.csproj" />
+    <ProjectReference Include="..\FeeBilling.Ingestion.Wcf\FeeBilling.Ingestion.Wcf.csproj" />
+    <ProjectReference Include="..\FeeBilling.Invoicing\FeeBilling.Invoicing.csproj" />
+  </ItemGroup>
+
+</Project>

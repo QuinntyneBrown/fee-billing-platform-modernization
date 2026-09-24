@@ -1,0 +1,16 @@
+<Project>
+  <!--
+    Defaults for the modernized code under src/ and tests/.
+    legacy/ has its own Directory.Build.props and does NOT inherit this file.
+  -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <Deterministic>true</Deterministic>
+    <Company>FeeBilling</Company>
+    <Product>FeeBilling Platform</Product>
+  </PropertyGroup>
+</Project>

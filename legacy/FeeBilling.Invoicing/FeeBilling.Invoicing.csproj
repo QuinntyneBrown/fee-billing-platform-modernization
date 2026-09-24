@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>FeeBilling.Invoicing</RootNamespace>
+    <AssemblyName>FeeBilling.Invoicing</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Stand-in for the commercial PDF library (v4, .NET Framework only) used in production.
+      PDFsharp 1.50 GDI+ build: same shape of problem - Framework-only and built on System.Drawing.
+    -->
+    <PackageReference Include="PDFsharp" Version="1.50.5147" />
+    <PackageReference Include="log4net" Version="2.0.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Shared between the legacy .NET Framework solution and the new .NET 10 services during the
+    transition, hence netstandard2.0. Retarget to net10.0 once no Framework project references it.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>FeeBilling.Domain</RootNamespace>
+  </PropertyGroup>
+
+</Project>

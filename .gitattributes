@@ -1,0 +1,7 @@
+* text=auto
+
+# Shell scripts run inside Linux containers
+*.sh text eol=lf
+
+# Custodian files are byte-exact test fixtures (Windows-1252, CRLF). Never normalize.
+seed/custodian-files/** binary

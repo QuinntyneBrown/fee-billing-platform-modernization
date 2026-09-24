@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>FeeBilling.Data</RootNamespace>
+    <AssemblyName>FeeBilling.Data</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="EntityFramework" Version="6.4.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="System.Transactions" />
+    <Reference Include="System.Web" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="FeeBilling.edmx" />
+    <None Include="FeeBilling.edmx.diagram">
+      <DependentUpon>FeeBilling.edmx</DependentUpon>
+    </None>
+  </ItemGroup>
+
+  <!--
+    Stand-in for Visual Studio's EntityDeploy task (which ships with VS, not with the EF6
+    NuGet package). Splits the EDMX runtime sections into the .csdl/.ssdl/.msl resources that
+    the connection string's metadata=res://*/FeeBilling.* entries point at.
+  -->
+  <Target Name="SplitEdmx" BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <_EdmxNamespaces>&lt;Namespace Prefix='edmx' Uri='http://schemas.microsoft.com/ado/2009/11/edmx' /&gt;</_EdmxNamespaces>
+      <_EdmxOut>$(IntermediateOutputPath)edmx\</_EdmxOut>
+    </PropertyGroup>
+    <XmlPeek XmlInputPath="FeeBilling.edmx" Namespaces="$(_EdmxNamespaces)" Query="/edmx:Edmx/edmx:Runtime/edmx:ConceptualModels/*">
+      <Output TaskParameter="Result" ItemName="_Csdl" />
+    </XmlPeek>
+    <XmlPeek XmlInputPath="FeeBilling.edmx" Namespaces="$(_EdmxNamespaces)" Query="/edmx:Edmx/edmx:Runtime/edmx:StorageModels/*">
+      <Output TaskParameter="Result" ItemName="_Ssdl" />
+    </XmlPeek>
+    <XmlPeek XmlInputPath="FeeBilling.edmx" Namespaces="$(_EdmxNamespaces)" Query="/edmx:Edmx/edmx:Runtime/edmx:Mappings/*">
+      <Output TaskParameter="Result" ItemName="_Msl" />
+    </XmlPeek>
+    <MakeDir Directories="$(_EdmxOut)" />
+    <WriteLinesToFile File="$(_EdmxOut)FeeBilling.csdl" Lines="@(_Csdl)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <WriteLinesToFile File="$(_EdmxOut)FeeBilling.ssdl" Lines="@(_Ssdl)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <WriteLinesToFile File="$(_EdmxOut)FeeBilling.msl" Lines="@(_Msl)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <EmbeddedResource Include="$(_EdmxOut)FeeBilling.csdl" LogicalName="FeeBilling.csdl" />
+      <EmbeddedResource Include="$(_EdmxOut)FeeBilling.ssdl" LogicalName="FeeBilling.ssdl" />
+      <EmbeddedResource Include="$(_EdmxOut)FeeBilling.msl" LogicalName="FeeBilling.msl" />
+    </ItemGroup>
+  </Target>
+
+</Project>

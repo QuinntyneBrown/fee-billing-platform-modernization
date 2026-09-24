@@ -1,0 +1,140 @@
+<ol class="breadcrumb">
+    <li><a href="#!/schedules">Fee schedules</a></li>
+    <li class="active">{{vm.isNew ? 'New schedule' : vm.schedule.Code}}</li>
+</ol>
+
+<div class="alert alert-danger" ng-if="vm.error">
+    <strong>{{vm.error}}</strong>
+    <ul ng-if="vm.validationErrors.length">
+        <li ng-repeat="e in vm.validationErrors"><code ng-if="e.field">{{e.field}}</code> {{e.message}}</li>
+    </ul>
+</div>
+
+<p class="text-muted" ng-if="vm.loading">
+    <span class="glyphicon glyphicon-refresh fb-spin"></span> Loading fee schedule...
+</p>
+
+<form name="scheduleForm" class="form-horizontal" novalidate
+      ng-if="vm.schedule"
+      ng-submit="vm.save(scheduleForm)">
+
+    <div class="form-group" ng-class="{ 'has-error': scheduleForm.code.$invalid && scheduleForm.$submitted }">
+        <label for="code" class="col-sm-2 control-label">Code</label>
+        <div class="col-sm-4">
+            <input id="code" name="code" type="text" class="form-control"
+                   ng-model="vm.schedule.Code" required maxlength="20" />
+        </div>
+    </div>
+
+    <div class="form-group" ng-class="{ 'has-error': scheduleForm.name.$invalid && scheduleForm.$submitted }">
+        <label for="name" class="col-sm-2 control-label">Name</label>
+        <div class="col-sm-6">
+            <input id="name" name="name" type="text" class="form-control"
+                   ng-model="vm.schedule.Name" required maxlength="100" />
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label for="scheduleType" class="col-sm-2 control-label">Type</label>
+        <div class="col-sm-3">
+            <select id="scheduleType" class="form-control"
+                    ng-model="vm.schedule.ScheduleType"
+                    ng-options="t for t in vm.scheduleTypes"></select>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label for="currency" class="col-sm-2 control-label">Currency</label>
+        <div class="col-sm-2">
+            <select id="currency" class="form-control"
+                    ng-model="vm.schedule.Currency"
+                    ng-options="c for c in vm.currencies"></select>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <div class="col-sm-offset-2 col-sm-6">
+            <div class="checkbox">
+                <label>
+                    <input type="checkbox" ng-model="vm.schedule.IsHousehold" /> Household schedule (bill on combined household assets)
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label for="minimum" class="col-sm-2 control-label">Minimum annual fee</label>
+        <div class="col-sm-3">
+            <div class="input-group">
+                <span class="input-group-addon">$</span>
+                <input id="minimum" type="number" class="form-control" min="0" step="any"
+                       ng-model="vm.schedule.MinimumAnnualFee" />
+            </div>
+        </div>
+    </div>
+
+    <div class="form-group" ng-if="vm.schedule.ScheduleType == 'FLAT'">
+        <label for="flatFee" class="col-sm-2 control-label">Flat annual fee</label>
+        <div class="col-sm-3">
+            <div class="input-group">
+                <span class="input-group-addon">$</span>
+                <input id="flatFee" type="number" class="form-control" min="0" step="any"
+                       ng-model="vm.schedule.FlatAnnualFee" />
+            </div>
+        </div>
+    </div>
+
+    <div class="form-group" ng-if="vm.schedule.ScheduleType != 'FLAT'">
+        <label class="col-sm-2 control-label">Tiers</label>
+        <div class="col-sm-8">
+            <table class="table table-condensed tier-table">
+                <thead>
+                    <tr>
+                        <th>From ($)</th>
+                        <th>To ($)</th>
+                        <th>Annual rate (%)</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr ng-repeat="tier in vm.schedule.Tiers">
+                        <td>
+                            <input type="number" class="form-control input-sm" min="0" step="any" required
+                                   ng-model="tier.LowerBound" />
+                        </td>
+                        <td>
+                            <input type="number" class="form-control input-sm" min="0" step="any"
+                                   ng-model="tier.UpperBound" placeholder="no limit" />
+                        </td>
+                        <td>
+                            <div class="input-group input-group-sm">
+                                <input type="number" class="form-control" min="0" step="any" required
+                                       ng-model="tier.AnnualRate" />
+                                <span class="input-group-addon">%</span>
+                            </div>
+                        </td>
+                        <td>
+                            <button type="button" class="btn btn-link btn-sm text-danger" title="Remove tier"
+                                    ng-click="vm.removeTier($index)">
+                                <span class="glyphicon glyphicon-remove"></span>
+                            </button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            <button type="button" class="btn btn-default btn-sm" ng-click="vm.addTier()">
+                <span class="glyphicon glyphicon-plus"></span> Add tier
+            </button>
+            <p class="help-block">Enter rates as percentages, e.g. 0.75 for 75 basis points.</p>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <div class="col-sm-offset-2 col-sm-10">
+            <button type="submit" class="btn btn-primary" ng-disabled="vm.saving">
+                {{vm.saving ? 'Saving...' : 'Save'}}
+            </button>
+            <a class="btn btn-default" href="#!/schedules">Cancel</a>
+        </div>
+    </div>
+</form>

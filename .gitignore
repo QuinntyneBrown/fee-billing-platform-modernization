@@ -1,0 +1,25 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+.vs/
+.vscode/
+.idea/
+
+# Test output
+TestResults/
+*.trx
+coverage*/
+
+# Legacy NuGet folder (packages.config era)
+legacy/packages/
+
+# Local secrets / env overrides
+.env
+appsettings.*.local.json
+
+# Node
+node_modules/

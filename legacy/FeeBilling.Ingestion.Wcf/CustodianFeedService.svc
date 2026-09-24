@@ -1,0 +1,1 @@
+<%@ ServiceHost Language="C#" Debug="true" Service="FeeBilling.Ingestion.Wcf.CustodianFeedService" CodeBehind="CustodianFeedService.svc.cs" %>

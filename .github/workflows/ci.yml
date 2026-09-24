@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  legacy:
+    name: Legacy (.NET Framework 4.7.2)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: dotnet build legacy/FeeBilling.sln -c Release
+
+      - name: Test
+        run: dotnet test legacy/FeeBilling.Tests -c Release --no-build
+        # Known failures (9) and ignored tests (22). Nobody trusts this suite; it doesn't gate merges.
+        continue-on-error: true
+
+  modern:
+    name: Modern (.NET 10)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: dotnet build FeeBilling.Modern.slnx -c Release
+
+      # Accounts.Api.Tests starts SQL Server with Testcontainers (Docker is available on ubuntu-latest).
+      - name: Test
+        run: dotnet test FeeBilling.Modern.slnx -c Release --no-build

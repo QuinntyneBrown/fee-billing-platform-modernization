@@ -1,0 +1,25 @@
+<Project>
+  <!--
+    Legacy solution, as found.
+
+    Deliberately does NOT import the repo-root Directory.Build.props: no nullable, no
+    warnings-as-errors, C# 7.3 (what VS2017-era .NET Framework 4.7.2 projects compiled with).
+
+    The projects were converted from old-style csproj + packages.config to SDK-style so they
+    build with the dotnet CLI on a machine without Visual Studio. See legacy/README.md.
+  -->
+  <PropertyGroup>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <AnalysisLevel>none</AnalysisLevel>
+    <NoWarn>$(NoWarn);NU1701;CS0618;CS0612;CS1591</NoWarn>
+    <Company>FeeBilling</Company>
+    <Product>FeeBilling</Product>
+    <Copyright>Copyright © FeeBilling 2011-2016</Copyright>
+    <AssemblyVersion>4.12.0.0</AssemblyVersion>
+    <FileVersion>4.12.3.1187</FileVersion>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+</Project>

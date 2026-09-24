@@ -1,0 +1,104 @@
+<ol class="breadcrumb">
+    <li><a href="#!/accounts">Accounts</a></li>
+    <li class="active">Household {{vm.household.HouseholdCode}}</li>
+</ol>
+
+<div class="alert alert-danger" ng-if="vm.error">{{vm.error}}</div>
+
+<p class="text-muted" ng-if="vm.loading">
+    <span class="glyphicon glyphicon-refresh fb-spin"></span> Loading household...
+</p>
+
+<div ng-if="vm.household">
+    <div class="page-header">
+        <h2>{{vm.household.Name}} <small>{{vm.household.HouseholdCode}}</small></h2>
+    </div>
+
+    <dl class="dl-horizontal household-header">
+        <dt>Fee schedule</dt>
+        <dd>
+            <a ng-if="vm.household.FeeScheduleId" ng-href="#!/schedules/{{vm.household.FeeScheduleId}}">{{vm.household.FeeScheduleCode}}</a>
+            <span ng-if="!vm.household.FeeScheduleId" class="text-muted">(none - accounts use their own schedule)</span>
+        </dd>
+        <dt>Members</dt>
+        <dd>{{vm.household.MemberCount}}</dd>
+    </dl>
+
+    <div class="form-inline positions-asof">
+        <label for="asOf">Positions as of</label>
+        <input id="asOf" type="text" class="form-control input-sm" size="10" placeholder="yyyy-mm-dd"
+               ng-model="vm.asOf" ng-change="vm.asOfChanged()" />
+    </div>
+
+    <table class="table table-condensed member-table">
+        <thead>
+            <tr>
+                <th></th>
+                <th>Account #</th>
+                <th>Name</th>
+                <th>Custodian</th>
+                <th>Currency</th>
+                <th>Fee schedule</th>
+                <th>Opened</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr ng-repeat-start="m in vm.household.Members">
+                <td>
+                    <button type="button" class="btn btn-default btn-xs" title="Show positions"
+                            ng-click="vm.togglePositions(m)">
+                        <span class="glyphicon"
+                              ng-class="vm.expanded[m.Id] ? 'glyphicon-chevron-down' : 'glyphicon-chevron-right'"></span>
+                    </button>
+                </td>
+                <td>{{m.AccountNumber}}</td>
+                <td>{{m.AccountName}}</td>
+                <td>{{m.CustodianCode}}</td>
+                <td>{{m.Currency}}</td>
+                <td>{{m.FeeScheduleCode}}</td>
+                <td>{{m.OpenedOn | date:'yyyy-MM-dd'}}</td>
+                <td>
+                    <span class="label label-success" ng-if="m.IsActive">Active</span>
+                    <span class="label label-default" ng-if="!m.IsActive">Closed {{m.ClosedOn | date:'yyyy-MM-dd'}}</span>
+                </td>
+            </tr>
+            <tr ng-repeat-end ng-if="vm.expanded[m.Id]" class="positions-row">
+                <td></td>
+                <td colspan="7">
+                    <p class="text-muted" ng-if="!vm.positions[m.Id]">Loading positions...</p>
+                    <p class="text-muted" ng-if="vm.positions[m.Id] && vm.positions[m.Id].length === 0">
+                        No positions on {{vm.asOf}}.
+                    </p>
+                    <table class="table table-condensed positions-table" ng-if="vm.positions[m.Id].length">
+                        <thead>
+                            <tr>
+                                <th>Security</th>
+                                <th>Description</th>
+                                <th class="text-right">Quantity</th>
+                                <th class="text-right">Market value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr ng-repeat="p in vm.positions[m.Id]" ng-class="{ 'text-muted': p.IsCashSleeve }">
+                                <td>{{p.SecurityCode}}</td>
+                                <td>
+                                    {{p.SecurityName}}
+                                    <span class="label label-info" ng-if="p.IsCashSleeve">cash sleeve</span>
+                                </td>
+                                <td class="text-right">{{p.Quantity | number:4}}</td>
+                                <td class="text-right">{{p.MarketValue | currency}}</td>
+                            </tr>
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <th colspan="3">Total</th>
+                                <th class="text-right">{{vm.positionsTotal(m.Id) | currency}}</th>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</div>

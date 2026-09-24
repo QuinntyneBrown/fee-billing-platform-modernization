@@ -1,0 +1,13 @@
+ACCOUNT     NAME                              MARKET VALUEAS OF     
+LFG000002001Gagnon, Marie - REER                1052590.682026-09-30
+LFG000002002Roy, Marie - REER                   7084187.852026-09-30
+LFG000002003Côté, Jean - REER                    609471.472026-09-30
+LFG000002004Bouchard, Jean - REER               6631029.512026-09-30
+LFG000002005Gauthier, Jean - REER               2940392.002026-09-30
+LFG000002006Morin, Pierre - REER                6177871.182026-09-30
+LFG000002007Lavoie, Pierre - CELI               7193116.692026-09-30
+LFG000002008Fortin, Pierre - CELI               5724713.852026-09-30
+LFG000002009Gagné, Hélène - CELI                6739958.362026-09-30
+LFG000002010Ouellet, Hélène - CELI               312352.122026-09-30
+LFG000002011Pelletier, Hélène - CELI            6286800.032026-09-30
+LFG000002012Bélanger, François - CELI           4818397.192026-09-30

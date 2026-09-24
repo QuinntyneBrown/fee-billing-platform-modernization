@@ -1,0 +1,32 @@
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{json,yml,yaml,xml,csproj,props,targets,config,slnx}]
+indent_size = 2
+
+[*.{js,html,css}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+# Custodian fixture files are byte-exact
+[seed/custodian-files/**]
+charset = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+
+[*.cs]
+csharp_style_namespace_declarations = file_scoped:suggestion
+dotnet_sort_system_directives_first = true
+
+# legacy/ is kept as found: don't let analyzers or formatters "fix" it.
+[legacy/**.cs]
+generated_code = true
+csharp_style_namespace_declarations = block_scoped:none

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="3.0" xmlns:edmx="http://schemas.microsoft.com/ado/2009/11/edmx">
+ <!-- EF Designer content (DO NOT EDIT MANUALLY BELOW HERE) -->
+  <edmx:Designer xmlns="http://schemas.microsoft.com/ado/2009/11/edmx">
+    <!-- Diagram content (shape and connector positions) -->
+    <edmx:Diagrams>
+      <Diagram DiagramId="6b0c0b52a2e34c5f9a4a5b9b1d7c0e11" Name="Diagram1">
+        <EntityTypeShape EntityType="FeeBillingModel.Account" Width="1.5" PointX="3" PointY="1" />
+        <EntityTypeShape EntityType="FeeBillingModel.AppUser" Width="1.5" PointX="9" PointY="1" />
+        <EntityTypeShape EntityType="FeeBillingModel.BillingRunQueueItem" Width="1.5" PointX="7" PointY="5" />
+        <EntityTypeShape EntityType="FeeBillingModel.CashFlow" Width="1.5" PointX="9" PointY="4" />
+        <EntityTypeShape EntityType="FeeBillingModel.FeeDebit" Width="1.5" PointX="9" PointY="7" />
+        <EntityTypeShape EntityType="FeeBillingModel.FeeSchedule" Width="1.5" PointX="0.75" PointY="1" />
+        <EntityTypeShape EntityType="FeeBillingModel.FeeTier" Width="1.5" PointX="0.75" PointY="5.5" />
+        <EntityTypeShape EntityType="FeeBillingModel.FirmBillingExclusion" Width="1.5" PointX="11" PointY="1" />
+        <EntityTypeShape EntityType="FeeBillingModel.Firm" Width="1.5" PointX="5" PointY="0.5" />
+        <EntityTypeShape EntityType="FeeBillingModel.Household" Width="1.5" PointX="0.75" PointY="8" />
+        <EntityTypeShape EntityType="FeeBillingModel.Invoice" Width="1.5" PointX="5" PointY="5" />
+        <EntityTypeShape EntityType="FeeBillingModel.Position" Width="1.5" PointX="5" PointY="8.5" />
+        <EntityTypeShape EntityType="FeeBillingModel.StagedBatch" Width="1.5" PointX="11" PointY="4" />
+        <AssociationConnector Association="FeeBillingModel.FK_Accounts_FeeSchedules" />
+        <AssociationConnector Association="FeeBillingModel.FK_Accounts_Firms" />
+        <AssociationConnector Association="FeeBillingModel.FK_Accounts_Households" />
+        <AssociationConnector Association="FeeBillingModel.FK_FeeTiers_FeeSchedules" />
+        <AssociationConnector Association="FeeBillingModel.FK_Households_FeeSchedules" />
+        <AssociationConnector Association="FeeBillingModel.FK_Invoices_Accounts" />
+        <AssociationConnector Association="FeeBillingModel.FK_Invoices_BillingRunQueue" />
+        <AssociationConnector Association="FeeBillingModel.FK_Positions_Accounts" />
+      </Diagram>
+    </edmx:Diagrams>
+  </edmx:Designer>
+</edmx:Edmx>

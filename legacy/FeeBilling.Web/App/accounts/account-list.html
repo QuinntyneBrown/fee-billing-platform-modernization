@@ -1,0 +1,58 @@
+<div class="page-header">
+    <h2>Accounts</h2>
+</div>
+
+<div class="alert alert-danger" ng-if="vm.error">{{vm.error}}</div>
+
+<div class="form-inline account-toolbar">
+    <div class="form-group">
+        <label for="accountFirm">Firm</label>
+        <select id="accountFirm" class="form-control"
+                ng-model="vm.firmId"
+                ng-options="firm.id as firm.name for firm in vm.firms"
+                ng-change="vm.load()"></select>
+    </div>
+    <div class="form-group">
+        <label for="accountSearch" class="sr-only">Search</label>
+        <input id="accountSearch" type="text" class="form-control"
+               placeholder="Account number or name..."
+               ng-model="vm.search"
+               ng-model-options="{ debounce: 300 }"
+               ng-change="vm.load()" />
+    </div>
+    <span class="text-muted" ng-if="vm.loading">
+        <span class="glyphicon glyphicon-refresh fb-spin"></span> Loading...
+    </span>
+</div>
+
+<table class="table table-striped table-condensed table-hover">
+    <thead>
+        <tr>
+            <th>Account #</th>
+            <th>Name</th>
+            <th>Household</th>
+            <th>Fee schedule</th>
+            <th>Custodian</th>
+            <th>Opened</th>
+            <th>Last valued</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr ng-repeat="account in vm.accounts" ng-class="{ 'text-muted': !account.IsActive }">
+            <td>{{account.AccountNumber}}</td>
+            <td>{{account.AccountName}}</td>
+            <td>
+                <a ng-if="account.HouseholdId" ng-href="#!/households/{{account.HouseholdId}}">{{account.HouseholdCode}}</a>
+            </td>
+            <td>{{account.FeeScheduleCode}}</td>
+            <td>{{account.CustodianCode}}</td>
+            <td>{{account.OpenedOn | date:'yyyy-MM-dd'}}</td>
+            <td>{{account.LastValuedAt | date:'yyyy-MM-dd'}}</td>
+            <td><span class="label label-default" ng-if="!account.IsActive">Closed</span></td>
+        </tr>
+        <tr ng-if="!vm.loading && vm.accounts.length === 0">
+            <td colspan="8" class="text-muted">No accounts found.</td>
+        </tr>
+    </tbody>
+</table>

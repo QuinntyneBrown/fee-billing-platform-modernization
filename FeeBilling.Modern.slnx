@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FeeBilling.Accounts.Api/FeeBilling.Accounts.Api.csproj" />
+    <Project Path="src/FeeBilling.Domain/FeeBilling.Domain.csproj" />
+    <Project Path="src/FeeBilling.Gateway/FeeBilling.Gateway.csproj" />
+    <Project Path="src/FeeBilling.Infrastructure/FeeBilling.Infrastructure.csproj" />
+    <Project Path="src/FeeBilling.ServiceDefaults/FeeBilling.ServiceDefaults.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FeeBilling.Accounts.Api.Tests/FeeBilling.Accounts.Api.Tests.csproj" />
+    <Project Path="tests/FeeBilling.Domain.Tests/FeeBilling.Domain.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/FeeBilling.DbInit/FeeBilling.DbInit.csproj" />
+  </Folder>
+</Solution>

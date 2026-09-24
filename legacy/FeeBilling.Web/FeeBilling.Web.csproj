@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ASP.NET MVC 5 + Web API 2 application, hosted in IIS in production.
+    Converted to SDK-style so it compiles with the dotnet CLI; it is not runnable without IIS /
+    IIS Express (see legacy/README.md). Output is a class library + content, which is what an
+    IIS web application is.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Library</OutputType>
+    <RootNamespace>FeeBilling.Web</RootNamespace>
+    <AssemblyName>FeeBilling.Web</AssemblyName>
+    <OutputPath>bin\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="EntityFramework" Version="6.4.4" />
+    <PackageReference Include="log4net" Version="2.0.8" />
+    <PackageReference Include="Microsoft.AspNet.Mvc" Version="5.2.7" />
+    <PackageReference Include="Microsoft.AspNet.WebApi" Version="5.2.7" />
+    <PackageReference Include="Newtonsoft.Json" Version="11.0.2" />
+    <PackageReference Include="Unity" Version="5.11.1" />
+    <PackageReference Include="Unity.Mvc" Version="5.11.1" />
+    <PackageReference Include="Unity.AspNet.WebApi" Version="5.11.1" />
+    <!-- Added in 2025 by the modernization team (remote app server + remote authentication). -->
+    <PackageReference Include="Microsoft.AspNetCore.SystemWebAdapters.FrameworkServices" Version="2.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.ComponentModel.DataAnnotations" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Web" />
+    <Reference Include="System.Web.ApplicationServices" />
+    <Reference Include="System.Web.Abstractions" />
+    <Reference Include="System.Web.Routing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FeeBilling.Core\FeeBilling.Core.csproj" />
+    <ProjectReference Include="..\FeeBilling.Data\FeeBilling.Data.csproj" />
+    <ProjectReference Include="..\FeeBilling.Invoicing\FeeBilling.Invoicing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Global.asax" />
+    <Content Include="Web.config" />
+    <Content Include="App\**\*.js;App\**\*.html;App\**\*.css" />
+    <Content Include="Views\**\*.cshtml;Views\web.config" />
+    <None Include="Web.Debug.config;Web.Release.config;Web.ClientX.config">
+      <DependentUpon>Web.config</DependentUpon>
+    </None>
+  </ItemGroup>
+
+</Project>
