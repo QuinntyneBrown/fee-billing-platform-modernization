@@ -5,3 +5,6 @@
 
 # Custodian files are byte-exact test fixtures (Windows-1252, CRLF). Never normalize.
 seed/custodian-files/** binary
+
+# Instructional audio lessons are stored in Git LFS.
+docs/instructional/**/*.mp3 filter=lfs diff=lfs merge=lfs -text
