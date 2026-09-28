@@ -137,6 +137,7 @@ foreach (var lesson in lessons)
 {
     using var frames = new MemoryStream();
     var seconds = 0.0;
+    var timeline = new List<(Chunk Chunk, double Start, double Duration)>();
     foreach (var chunk in lesson.Chunks)
     {
         var chunkFrames = Mp3.ExtractFrames(File.ReadAllBytes(CachePath(chunk)), out var chunkSeconds);
@@ -146,8 +147,15 @@ foreach (var lesson in lessons)
         }
 
         frames.Write(chunkFrames);
+        timeline.Add((chunk, seconds, chunkSeconds));
         seconds += chunkSeconds;
     }
+
+    // Where each paragraph falls in the MP3, for tools that sync slides or captions to the narration
+    // (tools/instructional-video). Chunk boundaries are exact; paragraph times within a chunk are estimated.
+    var timingsDirectory = Path.Combine(cacheDirectory, "timings");
+    Directory.CreateDirectory(timingsDirectory);
+    Timings.Write(Path.Combine(timingsDirectory, Path.GetFileNameWithoutExtension(lesson.OutputPath) + ".json"), seconds, timeline);
 
     var tag = Mp3.BuildId3Tag(
     [
@@ -250,18 +258,73 @@ static string FindRepoRoot()
     throw new InvalidOperationException("Run from inside the fee-billing-platform-modernization repository.");
 }
 
-sealed record Chunk(string Label, string Ssml, string Hash, int Words, int Characters, int VoiceTags);
+sealed record Chunk(string Label, string? Heading, List<Segment> Segments, string Ssml, string Hash, int Words, int Characters, int VoiceTags);
 
 sealed record Lesson(string OutputPath, string TagTitle, string TrackNumber, List<Chunk> Chunks);
 
 abstract record Segment;
 
-sealed record Speech(string Voice, string Text) : Segment
+/// <param name="Text">Speakable, XML-escaped text sent to the service.</param>
+/// <param name="Source">The script's own wording (markdown), for captions and slide cues.</param>
+sealed record Speech(string Voice, string Text, string Source) : Segment
 {
     public int Words => Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
 }
 
 sealed record Pause(int Milliseconds) : Segment;
+
+static class Timings
+{
+    // Must match the breaks ScriptBuilder.ToChunk writes after each speech segment and at the end of a chunk.
+    private const double BreakAfterSpeech = 0.45;
+    private const double TrailingBreak = 1.2;
+
+    public static void Write(string path, double totalSeconds, List<(Chunk Chunk, double Start, double Duration)> timeline)
+    {
+        using var stream = File.Create(path);
+        using var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true });
+        json.WriteStartObject();
+        json.WriteNumber("duration", Math.Round(totalSeconds, 3));
+        json.WriteStartArray("chunks");
+        foreach (var (chunk, start, duration) in timeline)
+        {
+            json.WriteStartObject();
+            json.WriteString("heading", chunk.Heading);
+            json.WriteNumber("start", Math.Round(start, 3));
+            json.WriteNumber("duration", Math.Round(duration, 3));
+            json.WriteStartArray("segments");
+
+            // Silence is known exactly; spread the rest of the chunk's measured length across its words.
+            var silence = chunk.Segments.Sum(s => s is Pause p ? p.Milliseconds / 1000.0 : BreakAfterSpeech) + TrailingBreak;
+            var secondsPerWord = Math.Max(0, duration - silence) / Math.Max(1, chunk.Words);
+            var time = start;
+            foreach (var segment in chunk.Segments)
+            {
+                if (segment is Speech speech)
+                {
+                    var length = speech.Words * secondsPerWord;
+                    json.WriteStartObject();
+                    json.WriteString("voice", speech.Voice);
+                    json.WriteString("source", speech.Source);
+                    json.WriteNumber("start", Math.Round(time, 3));
+                    json.WriteNumber("duration", Math.Round(length, 3));
+                    json.WriteEndObject();
+                    time += length + BreakAfterSpeech;
+                }
+                else if (segment is Pause pause)
+                {
+                    time += pause.Milliseconds / 1000.0;
+                }
+            }
+
+            json.WriteEndArray();
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+        json.WriteEndObject();
+    }
+}
 
 /// <summary>
 /// Turns a lesson's script.md into SSML chunks. The script format is deliberately small:
@@ -319,14 +382,14 @@ sealed partial class ScriptBuilder(Lexicon lexicon, string narrator, string inte
             {
                 Flush();
                 var heading = line[3..].Trim();
-                sections.Add((heading, [new Speech(narrator, Speak(heading) + "."), new Pause(900)]));
+                sections.Add((heading, [new Speech(narrator, Speak(heading) + ".", heading), new Pause(900)]));
                 continue;
             }
 
             if (line.StartsWith("### ", StringComparison.Ordinal))
             {
                 Flush();
-                sections[^1].Segments.Add(new Speech(narrator, Speak(line[4..].Trim()) + "."));
+                sections[^1].Segments.Add(new Speech(narrator, Speak(line[4..].Trim()) + ".", line[4..].Trim()));
                 sections[^1].Segments.Add(new Pause(600));
                 continue;
             }
@@ -364,17 +427,17 @@ sealed partial class ScriptBuilder(Lexicon lexicon, string narrator, string inte
         if (errors.Count > startingErrors) { return null; }
 
         // Spoken intro and outro, so every file announces itself when played out of context.
-        sections[0].Segments.Insert(0, new Speech(narrator, Speak($"FeeBilling modernization, lesson {number}. {title}.")));
+        sections[0].Segments.Insert(0, new Speech(narrator, Speak($"FeeBilling modernization, lesson {number}. {title}."), $"FeeBilling modernization, lesson {number}. {title}."));
         sections[0].Segments.Insert(1, new Pause(1000));
         sections[^1].Segments.Add(new Pause(800));
-        sections[^1].Segments.Add(new Speech(narrator, $"That's the end of lesson {number}."));
+        sections[^1].Segments.Add(new Speech(narrator, $"That's the end of lesson {number}.", $"That's the end of lesson {number}."));
 
         var chunks = new List<Chunk>();
         foreach (var (heading, segments) in sections.Where(s => s.Segments.OfType<Speech>().Any()))
         {
             foreach (var part in SplitForLimits(segments))
             {
-                chunks.Add(ToChunk($"{name} #{chunks.Count:00} {heading ?? "intro"}", part));
+                chunks.Add(ToChunk($"{name} #{chunks.Count:00} {heading ?? "intro"}", heading, part));
             }
         }
 
@@ -383,10 +446,10 @@ sealed partial class ScriptBuilder(Lexicon lexicon, string narrator, string inte
 
     public Lesson BuildPronunciationTest(string outputPath)
     {
-        var segments = new List<Segment> { new Speech(narrator, "Pronunciation test. Each term is followed by a short pause."), new Pause(800) };
+        var segments = new List<Segment> { new Speech(narrator, "Pronunciation test. Each term is followed by a short pause.", "Pronunciation test."), new Pause(800) };
         foreach (var term in lexicon.Terms)
         {
-            segments.Add(new Speech(narrator, XmlEscape(lexicon.Prose(term)) + "."));
+            segments.Add(new Speech(narrator, XmlEscape(lexicon.Prose(term)) + ".", term));
             segments.Add(new Pause(400));
         }
 
@@ -400,15 +463,15 @@ sealed partial class ScriptBuilder(Lexicon lexicon, string narrator, string inte
             "usp_GetBillableAum",
         })
         {
-            segments.Add(new Speech(narrator, XmlEscape(lexicon.Code(code)) + "."));
+            segments.Add(new Speech(narrator, XmlEscape(lexicon.Code(code)) + ".", code));
             segments.Add(new Pause(400));
         }
 
-        segments.Add(new Speech(interviewer, "And this is the interviewer voice. How would you approach modernizing a large dot net Framework application?"));
+        segments.Add(new Speech(interviewer, "And this is the interviewer voice. How would you approach modernizing a large dot net Framework application?", "Interviewer voice sample."));
         segments.Add(new Pause(3000));
-        segments.Add(new Speech(narrator, "That pause was three seconds."));
+        segments.Add(new Speech(narrator, "That pause was three seconds.", "That pause was three seconds."));
 
-        return new Lesson(outputPath, "Pronunciation test", "0/0", SplitForLimits(segments).Select((p, i) => ToChunk($"pronunciation #{i:00}", p)).ToList());
+        return new Lesson(outputPath, "Pronunciation test", "0/0", SplitForLimits(segments).Select((p, i) => ToChunk($"pronunciation #{i:00}", null, p)).ToList());
     }
 
     private IEnumerable<Segment> SpeakParagraph(string markdown)
@@ -425,13 +488,13 @@ sealed partial class ScriptBuilder(Lexicon lexicon, string narrator, string inte
         foreach (Match match in InlinePause().Matches(markdown))
         {
             var before = markdown[position..match.Index].Trim();
-            if (before.Length > 0) { yield return new Speech(voice, Speak(before)); }
+            if (before.Length > 0) { yield return new Speech(voice, Speak(before), before); }
             yield return new Pause(PauseMilliseconds(match));
             position = match.Index + match.Length;
         }
 
         var rest = markdown[position..].Trim();
-        if (rest.Length > 0) { yield return new Speech(voice, Speak(rest)); }
+        if (rest.Length > 0) { yield return new Speech(voice, Speak(rest), rest); }
     }
 
     /// <summary>Markdown to speakable, XML-escaped text: code spans through the code rules, prose through the lexicon.</summary>
@@ -478,7 +541,7 @@ sealed partial class ScriptBuilder(Lexicon lexicon, string narrator, string inte
         if (current.OfType<Speech>().Any()) { yield return current; }
     }
 
-    private Chunk ToChunk(string label, List<Segment> segments)
+    private Chunk ToChunk(string label, string? heading, List<Segment> segments)
     {
         var ssml = new StringBuilder();
         ssml.Append("<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xmlns:mstts=\"https://www.w3.org/2001/mstts\" xml:lang=\"en-US\">");
@@ -516,6 +579,8 @@ sealed partial class ScriptBuilder(Lexicon lexicon, string narrator, string inte
         var speeches = segments.OfType<Speech>().ToList();
         return new Chunk(
             label,
+            heading,
+            segments,
             text,
             Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text))),
             speeches.Sum(s => s.Words),
