@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work packages:** WP-01, WP-02 · **Prerequisites:** 04
 
-**Audio lesson:** [05-money-rounding-and-numeric-parity.mp3](05-money-rounding-and-numeric-parity.mp3) · [Transcript](script.md)
+**Video:** [05-money-rounding-and-numeric-parity.mp4](05-money-rounding-and-numeric-parity.mp4) · [Slides](slides.html) · **Audio lesson:** [05-money-rounding-and-numeric-parity.mp3](05-money-rounding-and-numeric-parity.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

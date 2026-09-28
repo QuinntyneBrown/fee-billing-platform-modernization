@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-08 · **Prerequisites:** 07, 10, 13
 
-**Audio lesson:** [20-authentication-authorization-and-tenancy.mp3](20-authentication-authorization-and-tenancy.mp3) · [Transcript](script.md)
+**Video:** [20-authentication-authorization-and-tenancy.mp4](20-authentication-authorization-and-tenancy.mp4) · [Slides](slides.html) · **Audio lesson:** [20-authentication-authorization-and-tenancy.mp3](20-authentication-authorization-and-tenancy.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

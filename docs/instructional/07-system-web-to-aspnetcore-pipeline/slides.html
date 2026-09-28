@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 07 Slides</title>
+<!--
+  Slides for the lesson 07 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="07" data-lesson-title="From System.Web to the ASP.NET Core Pipeline" data-parts="Introduction|The questions|Global.asax to Program.cs|Middleware|Minimal APIs|Binding and validation|Authorization and the user|What's left|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 07</div>
+  <h1>From System.Web to the<br>ASP.NET Core Pipeline</h1>
+  <p class="lead">Global.asax, modules, Web API 2 and HttpContext.Current, re-expressed</p>
+</section>
+
+<section id="no-system-web" data-part="0" data-cue="So every part of the legacy web application that depends on it">
+  <h2>System.Web doesn't exist in modern .NET</h2>
+  <div class="cols">
+    <ul>
+      <li>Global.asax</li>
+      <li>HTTP modules</li>
+      <li>Web API 2 controllers</li>
+      <li>HttpResponseMessage</li>
+      <li>HttpContext.Current</li>
+    </ul>
+    <div class="card">
+      <h3>What interviewers test</h3>
+      <p>The mapping, and more importantly, the behaviours that <span class="amber">change along the way</span>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="reference" data-part="0" data-cue="FeeBilling has already done this once">
+  <h2>The reference: Accounts.Api</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Before</h3><p>AccountsController and HouseholdsController: Web API 2 on IIS</p></div>
+    <div class="card modern"><h3>After</h3><p>Minimal API endpoints in FeeBilling.Accounts.Api (.NET 10)</p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">Then map the three controllers still waiting to move.</p>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>What replaces Global.asax, HTTP modules and HTTP handlers?</li>
+    <li>Minimal APIs or controllers?</li>
+    <li>What happens to HttpResponseMessage and IHttpActionResult?</li>
+    <li>How does model binding differ?</li>
+    <li>How do you get the current user without HttpContext.Current?</li>
+  </ul>
+</section>
+
+<section id="silent" data-part="1" data-cue="The two things to remember for this lesson">
+  <div class="kicker">What breaks silently</div>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">1 · Error response shapes</h3><p>The old front end reads the old shape.</p></div>
+    <div class="card legacy"><h3 class="amber">2 · Free behaviours from Web.config</h3><p>Things nobody wrote in code, so nobody ports them.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Global.asax ───────────── -->
+<section id="global-asax" data-part="2" data-cue="From Global.asax to Program.cs">
+  <div class="file">legacy/FeeBilling.Web/Global.asax.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,11,15">protected void Application_Start()
+{
+    log4net.Config.XmlConfigurator.Configure();
+    AreaRegistration.RegisterAllAreas();
+    GlobalConfiguration.Configure(WebApiConfig.Register);
+    FilterConfig.RegisterGlobalFilters(GlobalFilters.Filters);
+    RouteConfig.RegisterRoutes(RouteTable.Routes);
+    UnityConfig.RegisterComponents();
+    SystemWebAdapterConfiguration.AddSystemWebAdapters(this) // …
+}
+protected void Application_EndRequest(object sender, EventArgs e)
+{
+    DbContextFactory.DisposeCurrent();
+}
+protected void Application_Error(object sender, EventArgs e)
+{
+    var ex = Server.GetLastError();
+    Log.Error("Unhandled exception on " + Request.Url, ex);
+}</pre>
+</section>
+
+<template id="events">
+  <h2>Three events, three replacements</h2>
+  <div class="cols3">
+    <div class="card item"><h3>Application_Start</h3><p>Registration on the builder's service collection in Program.cs</p></div>
+    <div class="card item"><h3>Application_EndRequest</h3><p>Disappears: a scoped DbContext is disposed with the request scope</p></div>
+    <div class="card item"><h3>Application_Error</h3><p>AddProblemDetails + UseExceptionHandler (RFC 9457)</p></div>
+  </div>
+</template>
+<section id="events-1" data-part="2" data-cue="Application_Start configures log4net" data-template="events" data-highlight="1"></section>
+<section id="events-2" data-part="2" data-cue="Application_EndRequest calls DbContextFactory.DisposeCurrent" data-template="events" data-highlight="2"></section>
+<section id="events-3" data-part="2" data-cue="Application_Error logs any unhandled exception" data-template="events" data-highlight="3"></section>
+
+<section id="program-cs" data-part="2" data-cue="Now open src/FeeBilling.Accounts.Api/Program.cs">
+  <div class="kicker">The new version</div>
+  <div class="file">src/FeeBilling.Accounts.Api/Program.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="10,11,12,13">builder.AddServiceDefaults();
+
+builder.Services.AddFeeBillingInfrastructure(builder.Configuration);
+builder.Services.AddProblemDetails();
+// …
+builder.Services.AddAuthorization();
+
+var app = builder.Build();
+
+app.UseExceptionHandler();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseSystemWebAdapters();
+
+app.MapDefaultEndpoints();
+app.MapAccountsEndpoints();
+app.MapHouseholdsEndpoints();</pre>
+</section>
+
+<!-- ───────────── Middleware ───────────── -->
+<section id="modules-handlers" data-part="3" data-cue="Modules and handlers become middleware">
+  <h2>Modules and handlers become middleware</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Classic ASP.NET on IIS</h3><p>A fixed sequence of events per request. Modules subscribe to events. Handlers produce the response.</p></div>
+    <div class="card modern"><h3>ASP.NET Core</h3><p>A middleware pipeline, in exactly the order you write it. Modules → middleware. Handlers → endpoints.</p></div>
+  </div>
+</section>
+
+<section id="order" data-part="3" data-cue="That shift has a consequence">
+  <h2>Order bugs are now your bugs</h2>
+  <div class="timeline" style="grid-template-columns:repeat(4, 1fr)">
+    <div class="card modern"><h3>1</h3><p>UseExceptionHandler: early, wraps everything</p></div>
+    <div class="card"><h3>2</h3><p>UseAuthentication</p></div>
+    <div class="card"><h3>3</h3><p>UseAuthorization</p></div>
+    <div class="card"><h3>4</h3><p>Endpoints</p></div>
+  </div>
+  <p class="muted" style="margin-top:40px">Wrong order looks like an authentication or serialization bug, not an ordering bug.</p>
+</section>
+
+<section id="module-config" data-part="3" data-cue="FeeBilling's Web.config even shows a module being registered">
+  <div class="file">legacy/FeeBilling.Web/Web.config · system.webServer</div>
+  <pre class="code" data-lang="xml" data-mark="3">&lt;modules&gt;
+  &lt;remove name="SystemWebAdapterModule" /&gt;
+  &lt;add name="SystemWebAdapterModule"
+       type="Microsoft.AspNetCore.SystemWebAdapters.SystemWebAdapterModule, …"
+       preCondition="managedHandler" /&gt;
+&lt;/modules&gt;</pre>
+  <p class="muted">The Framework half of the bridge the previous team added.</p>
+</section>
+
+<section id="culture" data-part="3" data-cue="First, the globalization element sets culture to auto">
+  <h2>Silent #1: per-request culture</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code" data-lang="xml" data-mark="2">&lt;!-- Thread culture follows the browser's Accept-Language header. --&gt;
+&lt;globalization culture="auto" uiCulture="auto" /&gt;</pre>
+  <p>Legacy formats numbers and dates in <span class="amber">the user's browser culture</span>. ASP.NET Core does nothing like that without request localization middleware.</p>
+</section>
+
+<section id="session" data-part="3" data-cue="Second, the session state element">
+  <h2>Silent #2: session</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code" data-lang="xml" data-mark="1">&lt;sessionState mode="InProc" timeout="60" /&gt;</pre>
+  <p>No session in ASP.NET Core unless you add it, and then a different API, <span class="amber">not shared</span> with legacy.</p>
+  <p class="muted small">Lesson 10 covers sharing state between the two apps.</p>
+</section>
+
+<!-- ───────────── Minimal APIs ───────────── -->
+<section id="legacy-controller" data-part="4" data-cue="Web API 2 becomes minimal APIs">
+  <h2>Before: Web API 2</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/AccountsController.cs</div>
+  <pre class="code" data-lang="cs" data-mark="6">[RoutePrefix("api/accounts")]
+public class AccountsController : ApiController
+{
+    // …
+    [HttpGet, Route("{id:int}")]
+    public IHttpActionResult GetAccount(int id)
+    {
+        var db = DbContextFactory.Current;
+        var account = db.Accounts.Find(id);
+        if (account == null) return NotFound();
+        return Ok(AccountDto.From(account));
+    }</pre>
+</section>
+
+<section id="minimal-endpoint" data-part="4" data-cue="src/FeeBilling.Accounts.Api/Accounts/AccountsEndpoints.cs is its replacement">
+  <div class="kicker">After: a minimal API endpoint</div>
+  <div class="file">src/FeeBilling.Accounts.Api/Accounts/AccountsEndpoints.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="5">var group = app.MapGroup("/api/accounts")
+    .RequireAuthorization()
+    .WithTags("Accounts");
+// …
+private static async Task&lt;Results&lt;Ok&lt;AccountDto&gt;, NotFound&gt;&gt; GetAccount(
+    int id,
+    FeeBillingDbContext db,
+    CancellationToken cancellationToken)
+{
+    var account = await db.Accounts
+        .AsNoTracking()
+        .Include(a => a.Household)
+        .SingleOrDefaultAsync(a => a.Id == id, cancellationToken);
+    if (account is null)
+    {
+        return TypedResults.NotFound();
+    }
+    // …</pre>
+</section>
+
+<section id="union-type" data-part="4" data-cue="Look at its return type">
+  <h2>The union type is the point</h2>
+  <pre class="code" data-lang="cs">Task&lt;Results&lt;Ok&lt;AccountDto&gt;, NotFound&gt;&gt;</pre>
+  <p>Tells <span class="accent">the compiler</span>, <span class="accent">the OpenAPI generator</span> and <span class="accent">your tests</span> exactly which responses the endpoint can produce.</p>
+  <p class="muted">With IHttpActionResult, all of that was invisible until runtime.</p>
+</section>
+
+<section id="route-names" data-part="4" data-cue="Route names carry over too">
+  <h2>Route names carry over</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/FeeSchedulesController.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,4">[HttpGet, Route("{id:int}", Name = "GetFeeSchedule")]
+public IHttpActionResult GetSchedule(int id)
+// …
+return CreatedAtRoute("GetFeeSchedule", new { id = schedule.Id }, FeeScheduleDto.From(schedule));</pre>
+  <p>Minimal API: <b>WithName("GetFeeSchedule")</b> on the get endpoint, <b>TypedResults.CreatedAtRoute</b> on create.</p>
+  <p class="amber small">Miss the name and create fails at runtime, not compile time.</p>
+</section>
+
+<section id="start-run" data-part="4" data-cue="Now look at the start-run action in BillingController">
+  <h2>A camelCase island in a PascalCase API</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/BillingController.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="6">[HttpPost, Route("runs")]
+public IHttpActionResult StartRun(BillingRunRequest req)
+{
+    var user = HttpContext.Current.User.Identity.Name;
+    var runId = BillingRunService.Enqueue(req.FirmId, req.PeriodEnd, user);
+    return Ok(new { runId });   // double-click = two billing runs = double-billed clients
+}</pre>
+  <div class="file">legacy/FeeBilling.Web/App/services/api.service.js</div>
+  <pre class="code tight" data-lang="js">// Returns { runId: 123 } (camelCase - the server returns an anonymous object).</pre>
+  <p class="small">Port it as a small record and pin the name with <b>JsonPropertyName("runId")</b>.</p>
+</section>
+
+<section id="mapping" data-part="4" data-cue="So the mapping is">
+  <h2>The mapping</h2>
+  <table>
+    <tr><th>Web API 2</th><th>ASP.NET Core</th></tr>
+    <tr><td>RoutePrefix</td><td>MapGroup</td></tr>
+    <tr><td>IHttpActionResult · Ok · NotFound</td><td>TypedResults + a Results union</td></tr>
+    <tr><td>MVC 5 action filters</td><td>MVC filters (controllers) or endpoint filters (minimal APIs)</td></tr>
+    <tr><td>HttpResponseMessage</td><td><span class="amber">No equivalent</span></td></tr>
+  </table>
+</section>
+
+<section id="response-message" data-part="4" data-cue="And HttpResponseMessage?">
+  <h2>HttpResponseMessage: no equivalent</h2>
+  <ul>
+    <li>Web API 2 let you build and return a raw response message</li>
+    <li>The ASP.NET Core 1 and 2 compatibility shim was <span class="amber">removed in 3.0</span></li>
+    <li>A ported method still compiles, and ASP.NET Core <span class="amber">serializes it as an object</span></li>
+  </ul>
+  <p class="muted" style="margin-top:28px">The client gets JSON describing a message, not the response you meant.</p>
+</section>
+
+<section id="get-invoices" data-part="4" data-cue="FeeBilling has exactly that case waiting">
+  <h2>The case waiting in FeeBilling</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/BillingController.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="2,5,6">[HttpGet, Route("runs/{id:int}/invoices")]
+public HttpResponseMessage GetInvoices(int id, string format = "json")
+{
+    DataSet ds = InvoiceRepository.GetInvoiceDataSet(id);   // ADO.NET, no paging
+    if (format == "csv") return CsvResult(ds.Tables[0]);
+    return Request.CreateResponse(HttpStatusCode.OK, ds);
+}</pre>
+  <div class="cols">
+    <div class="card"><h3>CSV</h3><p>Becomes a file or stream result</p></div>
+    <div class="card"><h3>DataSet JSON</h3><p>Needs a deliberate decision (lessons 11, 12)</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Binding and validation ───────────── -->
+<section id="binding" data-part="5" data-cue="Model binding and validation">
+  <h2>Model binding</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Web API 2</h3><p>Simple types from the URI. One complex type from the body.</p></div>
+    <div class="card modern"><h3>ASP.NET Core</h3><p>Sources inferred by convention, plus services, ClaimsPrincipal and the cancellation token.</p></div>
+  </div>
+</section>
+
+<section id="validation" data-part="5" data-cue="The bigger difference is validation errors">
+  <h2>Validation errors change shape</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/FeeSchedulesController.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="3">public IHttpActionResult CreateSchedule(FeeScheduleDto dto)
+{
+    if (!ModelState.IsValid) return BadRequest(ModelState);</pre>
+  <div class="cols">
+    <div><div class="file">Web API 2</div><pre class="code tight" data-lang="json">{ "Message": "…", "ModelState": { … } }</pre></div>
+    <div><div class="file">ASP.NET Core [ApiController]</div><pre class="code tight" data-lang="json">{ "type": "…", "title": "…",
+  "status": 400, "errors": { … } }</pre></div>
+  </div>
+  <p class="muted small">Minimal APIs: validation is opt-in; newer versions add built-in support. Check before you rely on it.</p>
+</section>
+
+<section id="front-end-error" data-part="5" data-cue="Why does that matter?">
+  <h2>The front end reads Message</h2>
+  <div class="file">legacy/FeeBilling.Web/App/billing/billing-review.controller.js</div>
+  <pre class="code" data-lang="js" data-mark="2">}, function (response) {
+    vm.error = (response.data &amp;&amp; response.data.Message) || 'Could not start the billing run.';
+});</pre>
+  <p>Against Problem Details, Message is undefined: the user sees the generic error. <span class="amber">Nothing throws, nothing logs.</span></p>
+</section>
+
+<section id="contract-errors" data-part="5" data-cue="So contract-test your error responses">
+  <h2>Contract-test errors, not only successes</h2>
+  <ul>
+    <li>Capture what legacy returns for an invalid request</li>
+    <li>Then decide deliberately, either:</li>
+  </ul>
+  <div class="cols" style="margin-top:12px">
+    <div class="card"><p>The new API matches the old error shape for endpoints the old front end still calls</p></div>
+    <div class="card"><p>Or the front end changes first</p></div>
+  </div>
+</section>
+
+<section id="json" data-part="5" data-cue="JSON is another difference">
+  <h2>And JSON itself</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Web API 2</h3><p>Newtonsoft, configured here for PascalCase</p></div>
+    <div class="card modern"><h3>ASP.NET Core</h3><p>System.Text.Json, camelCase by default</p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">Lesson 11.</p>
+</section>
+
+<!-- ───────────── Authorization and the user ───────────── -->
+<section id="global-authorize" data-part="6" data-cue="Filters, authorization and the current user">
+  <h2>A global Authorize filter</h2>
+  <div class="file">legacy/FeeBilling.Web/App_Start/WebApiConfig.cs</div>
+  <pre class="code" data-lang="cs" data-mark="2">// Everything under /api requires a Forms-auth cookie.
+config.Filters.Add(new AuthorizeAttribute());</pre>
+</section>
+
+<section id="two-ways" data-part="6" data-cue="There are two ways to express that in ASP.NET Core">
+  <h2>Two ways in ASP.NET Core</h2>
+  <div class="cols">
+    <div class="card"><h3>RequireAuthorization</h3><p>On each endpoint group. What Accounts.Api does.</p></div>
+    <div class="card modern"><h3>A fallback policy</h3><p>Safer: a new endpoint can't be accidentally anonymous.</p></div>
+  </div>
+  <div class="file" style="margin-top:32px">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs">builder.Services.AddAuthorizationBuilder()
+    .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
+// …
+app.MapHealthChecks("/health").AllowAnonymous();   // or the orchestrator restarts a healthy service</pre>
+</section>
+
+<section id="current-user" data-part="6" data-cue="Then the current user">
+  <h2>Pass the user in</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/BillingController.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1">var user = HttpContext.Current.User.Identity.Name;</pre>
+  <ul>
+    <li>Minimal API handlers: a <b>ClaimsPrincipal</b> parameter</li>
+    <li>Controllers: the <b>User</b> property</li>
+    <li><span class="amber">IHttpContextAccessor</span>: the same ambient pattern, renamed. Rare, never in domain code</li>
+  </ul>
+</section>
+
+<section id="remote-auth" data-part="6" data-cue="And one more authentication detail from this repo">
+  <h2>Know which endpoints run which middleware</h2>
+  <p>Accounts.Api's remote authentication calls back into legacy on every request.</p>
+  <p class="amber">IIS down → Accounts.Api returns 500 on everything, including /health.</p>
+</section>
+
+<!-- ───────────── What's left ───────────── -->
+<section id="whats-left" data-part="7" data-cue="What's left, and controllers versus minimal APIs">
+  <h2>Three controllers still waiting</h2>
+  <div class="cols3">
+    <div class="card"><h3>FeeSchedules</h3><p>Unity-injected context · hand-rolled ModelState checks</p></div>
+    <div class="card"><h3>Billing</h3><p>HttpContext.Current · HttpResponseMessage · DataSet</p></div>
+    <div class="card"><h3>Invoices</h3><p>Lazy loading · PDFs with System.Drawing</p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">Lessons 8, 11, 12, 13 and 21.</p>
+</section>
+
+<section id="minimal-or-controllers" data-part="7" data-cue="Finally, minimal APIs or controllers?">
+  <h2>Minimal APIs or controllers?</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Minimal APIs</h3><p>Less ceremony. TypedResults give accurate OpenAPI. Suit small vertical slices.</p></div>
+    <div class="card"><h3>Controllers</h3><p>Familiar to a Web API 2 team. Rich conventions and filters.</p></div>
+  </div>
+  <p style="margin-top:36px">Pick <span class="accent">one per service</span>, write the decision down, be consistent. FeeBilling's first slice chose minimal APIs.</p>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="8" data-cue="Here are the traps.">
+  <h2>Traps</h2>
+  <ul>
+    <li>Porting HttpResponseMessage literally</li>
+    <li>Assuming error responses don't matter</li>
+    <li>Losing Web.config behaviour, like per-request culture</li>
+    <li>Middleware in the wrong order</li>
+    <li>A fallback policy that locks out health checks</li>
+    <li>Authentication that runs for every request, health checks included</li>
+    <li>IHttpContextAccessor to preserve old patterns · mixing both styles</li>
+  </ul>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="9" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="9" data-cue="What replaces Global.asax, HTTP modules and HTTP handlers?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">What replaces Global.asax, HTTP modules and HTTP handlers?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="9" data-cue="Program.cs. Service registration happens on the builder">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Program.cs: registration on the builder, then an explicitly ordered pipeline</li>
+    <li>Modules → middleware · handlers → endpoints</li>
+    <li>Application_Error → UseExceptionHandler with Problem Details</li>
+    <li>Application_EndRequest cleanup disappears: scoped services die with the scope</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="9" data-cue="Minimal APIs or controllers?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">Minimal APIs or controllers?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="9" data-cue="Both are fully supported. Minimal APIs have less ceremony">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Both fully supported</li>
+    <li>Minimal APIs: less ceremony, TypedResults + Results union → accurate OpenAPI</li>
+    <li>Controllers: familiar, rich conventions and filters</li>
+    <li>One per service, recorded and consistent; FeeBilling's reference is minimal APIs</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="9" data-cue="What happens to HttpResponseMessage and IHttpActionResult?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">What happens to HttpResponseMessage and IHttpActionResult?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="9" data-cue="There's no direct equivalent; the compatibility shim was removed">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>No direct equivalent: the shim was removed in ASP.NET Core 3.0</li>
+    <li>Return TypedResults, or ActionResult of T in controllers</li>
+    <li>A ported HttpResponseMessage compiles and gets serialized as an object</li>
+    <li>FeeBilling: the invoice export becomes a file or stream result</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="9" data-cue="How does model binding differ?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">How does model binding differ?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="9" data-cue="Web API 2 binds simple types from the URI and one complex type from the body">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Web API 2: simple types from the URI, one complex type from the body</li>
+    <li>ASP.NET Core: inferred by convention, plus services, user, cancellation token</li>
+    <li>Bigger risk: automatic 400 validation problem details vs Message + ModelState</li>
+    <li>The AngularJS client reads Message, so contract-test errors</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="9" data-cue="How do you get the current user without HttpContext.Current?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">How do you get the current user without HttpContext.Current?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="9" data-cue="Pass it in. Minimal API handlers can bind">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Pass it in: a ClaimsPrincipal parameter, or User in controllers</li>
+    <li>Pass the user or claim explicitly to services that need it</li>
+    <li>IHttpContextAccessor: rare, never in domain code</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Global.asax becomes Program.cs: builder registration, ordered pipeline, exception handler first.</li>
+    <li class="item">Modules become middleware, handlers become endpoints. Order is your job.</li>
+    <li class="item">Minimal APIs: MapGroup, TypedResults, a Results union. HttpResponseMessage must be redesigned.</li>
+    <li class="item">Error shapes and Web.config behaviours break silently. Contract-test errors.</li>
+    <li class="item">RequireAuthorization or a fallback policy, anonymous health checks; pass the user in.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: Global.asax becomes Program.cs" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: modules become middleware" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: Web API 2 becomes minimal APIs" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: error shapes" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: authorization moves to" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="10" data-cue="In the next lesson">
+  <div class="kicker">Next</div>
+  <h1>08 · Dependency Injection and Ambient State</h1>
+  <p class="lead">Replacing Unity, removing HttpContext.Current, and using a scoped DbContext from a background service.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

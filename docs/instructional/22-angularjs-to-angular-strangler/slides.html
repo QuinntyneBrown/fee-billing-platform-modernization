@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 22 Slides</title>
+<!--
+  Slides for the lesson 22 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="22" data-lesson-title="AngularJS to Angular: Route-Level Strangler" data-parts="Introduction|The questions|The legacy front end|ngUpgrade vs route-level|The hash-routing problem|Building the screen|Authentication|Continuity and E2E|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 22</div>
+  <h1>AngularJS to Angular:<br>Route-Level Strangler</h1>
+  <p class="lead">AngularJS 1.6 has been end of life since January 2022. Migrate it one screen at a time.</p>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>How do you migrate an AngularJS app incrementally?</li>
+    <li>ngUpgrade or route-level?</li>
+    <li>How does the single-page app authenticate without storing tokens?</li>
+    <li>How do you keep the front end and the API contracts in sync?</li>
+    <li>How do you show fifty thousand rows?</li>
+  </ul>
+</section>
+
+<section id="three-things" data-part="1" data-cue="The billing screens depend on three things">
+  <h2>Three things the modern stack changes by default</h2>
+  <div class="cols3">
+    <div class="card legacy"><h3 class="amber">PascalCase JSON</h3><p>run.Status, inv.AccountNumber</p></div>
+    <div class="card legacy"><h3 class="amber">DataSet shape</h3><p>Invoice rows under a property called Table</p></div>
+    <div class="card legacy"><h3 class="amber">Hash URLs</h3><p>#!/billing, #!/schedules, #!/accounts</p></div>
+  </div>
+  <p class="muted" style="margin-top:40px">Each one is a place where a migrated screen can break silently.</p>
+</section>
+
+<!-- ───────────── Legacy front end ───────────── -->
+<section id="shell" data-part="2" data-cue="Start with the shell page">
+  <h2>The shell page</h2>
+  <div class="file">legacy/FeeBilling.Web/Views/Home/Index.cshtml</div>
+  <pre class="code tight" data-lang="html" data-mark="1,2,3,5">&lt;li&gt;&lt;a href="#!/billing"&gt;&lt;span class="glyphicon glyphicon-list-alt"&gt;&lt;/span&gt; Billing&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href="#!/schedules"&gt;&lt;span class="glyphicon glyphicon-tasks"&gt;&lt;/span&gt; Fee schedules&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href="#!/accounts"&gt;&lt;span class="glyphicon glyphicon-user"&gt;&lt;/span&gt; Accounts&lt;/a&gt;&lt;/li&gt;
+
+@* Order matters: module, then routes, then services, then controllers. No bundling. *@
+&lt;script src="~/App/app.module.js"&gt;&lt;/script&gt;
+&lt;script src="~/App/app.routes.js"&gt;&lt;/script&gt;
+&lt;script src="~/App/services/api.service.js"&gt;&lt;/script&gt;</pre>
+  <p class="small muted">No build step. <span class="accent">Views/Shared/_Layout.cshtml</span> loads AngularJS 1.6, jQuery and Bootstrap 3 from a CDN.</p>
+</section>
+
+<section id="module" data-part="2" data-cue="Next, legacy/FeeBilling.Web/App/app.module.js">
+  <h2>app.module.js</h2>
+  <div class="file">legacy/FeeBilling.Web/App/app.module.js</div>
+  <pre class="code tight" data-lang="js" data-mark="3,6,10">// AngularJS 1.6 changed the default hash prefix from '' to '!'. Set it explicitly so the
+// #!/ links in Views/Home/Index.cshtml keep working whatever version is on the CDN. (FB-231)
+$locationProvider.hashPrefix('!');
+
+// IE11 caches Web API GET responses, so the billing run list never updated. (FB-219)
+if (!$httpProvider.defaults.headers.get) {
+    $httpProvider.defaults.headers.get = {};
+}
+$httpProvider.defaults.headers.get['If-Modified-Since'] = 'Mon, 26 Jul 1997 05:00:00 GMT';
+$httpProvider.defaults.headers.get['Cache-Control'] = 'no-cache';
+$httpProvider.defaults.headers.get['Pragma'] = 'no-cache';</pre>
+</section>
+
+<section id="routes" data-part="2" data-cue="Then app.routes.js">
+  <h2>app.routes.js: an ngRoute table</h2>
+  <div class="file">legacy/FeeBilling.Web/App/app.routes.js</div>
+  <pre class="code" data-lang="js" data-mark="1">// '/schedules/new' has to be registered before '/schedules/:id' or ":id" matches "new".
+.when('/schedules/new', {
+    templateUrl: 'App/schedules/schedule-edit.html',
+    // …
+})
+.when('/schedules/:id', {
+    templateUrl: 'App/schedules/schedule-edit.html',
+    // …
+})</pre>
+</section>
+
+<section id="api-service" data-part="2" data-cue="The API service, App/services/api.service.js">
+  <h2>Where the contract assumptions live</h2>
+  <div class="file">legacy/FeeBilling.Web/App/services/api.service.js</div>
+  <pre class="code tight" data-lang="js" data-mark="3,5,7,9">// Relative on purpose so it works under an IIS virtual directory. Only works if the shell
+// is served from the site root (/), not /Home/Index.
+var baseUrl = 'api/';
+
+// TODO FB-279: POSTs don't send the anti-forgery token. Web API doesn't check it anyway.
+// …
+// Returns { runId: 123 } (camelCase - the server returns an anonymous object).
+// …
+// Returns a serialized DataSet: { "Table": [ ...invoice rows... ] }</pre>
+</section>
+
+<section id="billing-review" data-part="2" data-cue="Now the screen we're migrating: Billing Run Review">
+  <h2>The screen we're migrating: Billing Run Review</h2>
+  <div class="file">legacy/FeeBilling.Web/App/billing/billing-review.controller.js</div>
+  <pre class="code tight" data-lang="js" data-mark="1,4,9,10">// TODO FB-204: load these from an api/firms endpoint. Only two firms on this server.
+vm.firms = [
+// …
+// FB-247: people double-click this and we get two runs for the same period.
+// Server-side de-dupe is on the backlog.
+// …
+// Poll every 5s while anything is Pending/Running so the status updates by itself.
+// …
+// NOTE: the poller is not cancelled when you leave the page. It keeps calling
+// api/billing/runs every 5s in the background until the run finishes. (FB-262)</pre>
+</section>
+
+<section id="run-invoices" data-part="2" data-cue="The invoice list, run-invoices.controller.js">
+  <h2>The invoice list: every row, every time</h2>
+  <div class="file">legacy/FeeBilling.Web/App/billing/run-invoices.controller.js</div>
+  <pre class="code tight" data-lang="js" data-mark="3">// The server sends back the whole DataSet, so the rows are under "Table" (FB-238).
+// If anyone names the DataTable on the server this page silently shows nothing.
+vm.invoices = data.Table || [];</pre>
+  <div class="file">legacy/FeeBilling.Web/App/billing/run-invoices.html</div>
+  <pre class="code tight" data-lang="html" data-mark="1,3">&lt;tr ng-repeat="inv in vm.invoices | filter:vm.filterText"&gt;
+&lt;!-- … --&gt;
+&lt;th colspan="6"&gt;Total (all invoices in run)&lt;/th&gt;</pre>
+  <p class="small muted">Filtered in the browser. The total ignores the filter. A big firm: 40,000 rows in the DOM.</p>
+</section>
+
+<section id="not-just-rewrite" data-part="2" data-cue="So the migration isn't just a rewrite in a new framework">
+  <h2>Not just a rewrite</h2>
+  <p>A chance to fix these deliberately:</p>
+  <ul class="checks">
+    <li>Pagination</li>
+    <li>Polling</li>
+    <li>Idempotency</li>
+    <li>Contracts</li>
+  </ul>
+</section>
+
+<!-- ───────────── ngUpgrade vs route-level ───────────── -->
+<section id="ngupgrade" data-part="3" data-cue="There are two ways to migrate AngularJS incrementally">
+  <h2>ngUpgrade: one page, two frameworks</h2>
+  <div class="cols">
+    <div class="card">
+      <h3>What you get</h3>
+      <ul>
+        <li>AngularJS services upgraded for Angular</li>
+        <li>Angular components downgraded into AngularJS templates</li>
+        <li>Shared in-memory state, in-app navigation</li>
+      </ul>
+    </div>
+    <div class="card legacy">
+      <h3 class="amber">What it costs</h3>
+      <ul>
+        <li>Both frameworks in the bundle</li>
+        <li>Digest cycle and change detection interact</li>
+        <li>Old and new deploy together</li>
+        <li>Legacy scripts aren't bundled at all</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="route-level" data-part="3" data-cue="A route-level strangler is the same pattern we've used for the APIs">
+  <h2>Route-level: the same strangler as the APIs</h2>
+  <svg width="1640" height="480" viewBox="0 0 1640 480">
+    <defs><marker id="arrow-rl" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="180" width="220" height="110" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="110" y="245" fill="#e8eef8" font-size="32" text-anchor="middle">Browser</text>
+    <line x1="225" y1="235" x2="355" y2="235" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow-rl)"/>
+    <rect x="365" y="145" width="400" height="180" rx="18" fill="#121b2f" stroke="#38bdf8" stroke-width="3"/>
+    <text x="565" y="222" fill="#e8eef8" font-size="34" font-weight="600" text-anchor="middle">FeeBilling.Gateway</text>
+    <text x="565" y="265" fill="#8ea2c0" font-size="27" text-anchor="middle">YARP · same origin</text>
+    <path d="M770,190 C900,190 900,80 1030,80" fill="none" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow-rl)"/>
+    <path d="M770,280 C900,280 900,390 1030,390" fill="none" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow-rl)"/>
+    <text x="870" y="50" fill="#38bdf8" font-size="24" text-anchor="middle">/billing-review/…</text>
+    <text x="870" y="450" fill="#f5b544" font-size="24" text-anchor="middle">everything else</text>
+    <rect x="1040" y="10" width="600" height="140" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="1340" y="72" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">New Angular app</text>
+    <text x="1340" y="114" fill="#8ea2c0" font-size="26" text-anchor="middle">whole screens on real paths</text>
+    <rect x="1040" y="320" width="600" height="140" rx="18" fill="#221b0d" stroke="#f5b544" stroke-width="3"/>
+    <text x="1340" y="382" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">AngularJS shell (legacy)</text>
+    <text x="1340" y="424" fill="#8ea2c0" font-size="26" text-anchor="middle">every other screen</text>
+  </svg>
+  <p class="small muted" style="margin-top:20px">Nothing shared in memory: only APIs and the auth cookie. Crossing over is a full page load. Deploys are independent.</p>
+</section>
+
+<section id="which-fits" data-part="3" data-cue="Which one fits?">
+  <h2>Which one fits?</h2>
+  <div class="cols">
+    <div class="card"><h3>ngUpgrade</h3><p>Screens tightly interwoven, sharing in-memory state.</p></div>
+    <div class="card modern"><h3>Route-level</h3><p>Screens are separate routes: billing review, run invoices, schedules, accounts.</p></div>
+  </div>
+  <p class="accent" style="margin-top:40px">FeeBilling: route-level. Separate screens, independent deploys, no hybrid bootstrap. Record it in an ADR.</p>
+</section>
+
+<!-- ───────────── Hash routing ───────────── -->
+<section id="non-obvious" data-part="4" data-cue="Here's the non-obvious part">
+  <div class="kicker">The detail that shows you've done it</div>
+  <p class="quote">Browsers <span class="amber">never send the fragment</span> to the server.</p>
+</section>
+
+<section id="fragment" data-part="4" data-cue="In a URL, everything after the hash sign is the fragment">
+  <h2>What reaches the gateway</h2>
+  <svg width="1640" height="360" viewBox="0 0 1640 360">
+    <rect x="0" y="20" width="1640" height="110" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="60" y="92" font-size="46"><tspan fill="#e8eef8">http://localhost:5000/</tspan><tspan fill="#f5b544">#!/billing</tspan></text>
+    <line x1="280" y1="140" x2="280" y2="230" stroke="#38bdf8" stroke-width="4"/>
+    <line x1="600" y1="140" x2="600" y2="230" stroke="#f5b544" stroke-width="4"/>
+    <text x="280" y="280" fill="#38bdf8" font-size="32" text-anchor="middle">sent: GET /</text>
+    <text x="760" y="280" fill="#f5b544" font-size="32" text-anchor="start" dx="-160">fragment: stays in the browser</text>
+    <text x="600" y="325" fill="#8ea2c0" font-size="26" text-anchor="start">AngularJS reads it on the client</text>
+  </svg>
+</section>
+
+<section id="same-url" data-part="4" data-cue="That means YARP can't route one hash screen to a new app">
+  <h2>To YARP, every AngularJS screen is the same URL</h2>
+  <p>So the gateway can't send one hash screen to a new app.</p>
+  <p class="muted">Demo: open the billing screen. The gateway log and the browser's network tab both show a request for <span class="accent">/</span> only.</p>
+</section>
+
+<section id="design-follows" data-part="4" data-cue="So the design follows">
+  <h2>Split on real paths</h2>
+  <div class="file">Sketch · target design · src/FeeBilling.Gateway/appsettings.json</div>
+  <pre class="code tight" data-lang="json" data-mark="2">"Routes": {
+  "billing-review": { "ClusterId": "angular-app", "Match": { "Path": "/billing-review/{**rest}" } },
+  // … existing routes …
+  "fallback":   { "ClusterId": "legacy-iis",      "Match": { "Path": "{**catch-all}" }, "Order": 1000 }
+}</pre>
+  <div class="file">Sketch · target design · Views/Home/Index.cshtml</div>
+  <pre class="code tight" data-lang="html" data-mark="1">&lt;li&gt;&lt;a href="/billing-review"&gt;&lt;span class="glyphicon glyphicon-list-alt"&gt;&lt;/span&gt; Billing&lt;/a&gt;&lt;/li&gt;</pre>
+  <p class="small muted">Hash link → full-page link to the new path.</p>
+</section>
+
+<section id="bookmarks" data-part="4" data-cue="Old bookmarks still exist">
+  <h2>Old bookmarks: redirect on the client</h2>
+  <div class="file">Sketch · target design · legacy/FeeBilling.Web/App/app.routes.js</div>
+  <pre class="code" data-lang="js" data-mark="4">.when('/billing/runs/:runId', {
+    template: '',
+    controller: ['$routeParams', '$window', function ($routeParams, $window) {
+        $window.location.replace('/billing-review/runs/' + $routeParams.runId);
+    }]
+})</pre>
+  <p class="muted">The fragment never reaches the server, so only the client can redirect it.</p>
+</section>
+
+<section id="deep-links" data-part="4" data-cue="Real paths create one server-side job">
+  <h2>Real paths hand the route to the server</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Hash routing</h3><p>Server sees <b>/</b>. The route hides in the fragment.</p></div>
+    <div class="card modern"><h3>Real paths</h3><p>Server sees <b>/billing-review/runs/42</b> on a bookmark or refresh.</p></div>
+  </div>
+  <p style="margin-top:40px">The Angular host must answer <span class="accent">any path under its prefix</span> with the app's index page. Without that fallback: <span class="amber">404</span>.</p>
+</section>
+
+<section id="smaller-details" data-part="4" data-cue="Two smaller details">
+  <h2>Two smaller details</h2>
+  <div class="cols">
+    <div class="card"><h3>base href</h3><p>Matches the gateway path: <span class="accent">/billing-review/</span>, so the router and assets resolve.</p></div>
+    <div class="card legacy"><h3 class="amber">Absolute API URLs</h3><p>From <b>/billing-review/runs/42</b>, a relative <b>api/</b> resolves under billing-review. Use <span class="accent">/api/…</span></p></div>
+  </div>
+</section>
+
+<!-- ───────────── Building the screen ───────────── -->
+<section id="component" data-part="5" data-cue="Now build the migrated Billing Run Review screen">
+  <h2>Current Angular idioms</h2>
+  <div class="file">Sketch · target design · billing-run-review.ts</div>
+  <pre class="code" data-lang="ts" data-mark="7,8,9">@Component({
+  selector: 'fb-billing-run-review',
+  standalone: true,
+  templateUrl: './billing-run-review.html',
+})
+export class BillingRunReview {
+  readonly run = signal&lt;BillingRun | null&gt;(null);
+  readonly invoices = signal&lt;InvoiceRow[]&gt;([]);
+  readonly approving = signal(false);
+}</pre>
+  <p class="small muted">Standalone component, no NgModule · state in signals · templates use @if and @for</p>
+</section>
+
+<section id="openapi" data-part="5" data-cue="The HTTP client isn't hand-written">
+  <h2>Generate the client from OpenAPI</h2>
+  <svg width="1640" height="300" viewBox="0 0 1640 300">
+    <defs><marker id="arrow-oa" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="70" width="360" height="150" rx="18" fill="#121b2f" stroke="#38bdf8" stroke-width="3"/>
+    <text x="180" y="138" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Billing.Api</text>
+    <text x="180" y="180" fill="#8ea2c0" font-size="24" text-anchor="middle">Microsoft.AspNetCore.OpenApi</text>
+    <line x1="365" y1="145" x2="455" y2="145" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow-oa)"/>
+    <rect x="465" y="70" width="330" height="150" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="630" y="138" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">OpenAPI</text>
+    <text x="630" y="180" fill="#8ea2c0" font-size="24" text-anchor="middle">document</text>
+    <line x1="800" y1="145" x2="890" y2="145" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow-oa)"/>
+    <rect x="900" y="70" width="330" height="150" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="1065" y="138" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">CI generator</text>
+    <text x="1065" y="180" fill="#8ea2c0" font-size="24" text-anchor="middle">NSwag / openapi-generator</text>
+    <line x1="1235" y1="145" x2="1325" y2="145" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow-oa)"/>
+    <rect x="1335" y="70" width="305" height="150" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="1487" y="138" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Typed client</text>
+    <text x="1487" y="180" fill="#8ea2c0" font-size="24" text-anchor="middle">TypeScript</text>
+  </svg>
+  <p style="margin-top:20px">API changes shape → client regenerates → <span class="accent">the build fails</span>, not the page.</p>
+</section>
+
+<section id="schema-not-wire" data-part="5" data-cue="One caveat from lesson eleven">
+  <h2>The client trusts the schema, not the wire</h2>
+  <div class="cols">
+    <div class="card"><h3>OpenAPI document says</h3><p class="accent">runId, accountNumber</p></div>
+    <div class="card legacy"><h3 class="amber">The API actually sends</h3><p class="amber">RunId, AccountNumber</p></div>
+  </div>
+  <p style="margin-top:40px">Compiles cleanly, renders blanks. Make the document and the serializer agree, and <span class="accent">prove it with a test</span>.</p>
+</section>
+
+<section id="fifty-thousand" data-part="5" data-cue="Fifty thousand rows need two things">
+  <h2>Fifty thousand rows</h2>
+  <div class="cols">
+    <div class="card"><h3>1 · The server pages</h3><p>Cursor paging (lesson 12)</p></div>
+    <div class="card"><h3>2 · The browser virtualizes</h3><p>Only visible rows in the DOM</p></div>
+  </div>
+  <div class="file" style="margin-top:30px">Sketch · target design · billing-run-review.html</div>
+  <pre class="code tight" data-lang="html" data-mark="2">&lt;cdk-virtual-scroll-viewport itemSize="36"&gt;
+  &lt;div *cdkVirtualFor="let row of invoices()"&gt;{{ row.accountNumber }}&lt;/div&gt;
+&lt;/cdk-virtual-scroll-viewport&gt;</pre>
+  <p class="small muted">cdkVirtualFor, not the built-in @for: built-in control flow doesn't virtualize. Check for your version.</p>
+</section>
+
+<section id="polling" data-part="5" data-cue="Polling gets fixed properly">
+  <h2>Polling that stops by itself (FB-262)</h2>
+  <div class="file">Sketch · target design · billing-run-review.ts</div>
+  <pre class="code" data-lang="ts" data-mark="3,4">timer(0, 5000).pipe(
+  switchMap(() =&gt; this.api.getRun(this.runId)),
+  takeWhile(run =&gt; run.status === 'Pending' || run.status === 'Running', true),
+  takeUntilDestroyed(this.destroyRef),
+).subscribe(run =&gt; this.run.set(run));</pre>
+  <p class="muted">Ends when the run finishes, or when the component is destroyed via its <span class="accent">DestroyRef</span>.</p>
+</section>
+
+<section id="shortcuts" data-part="5" data-cue="Two more legacy shortcuts go away with the rewrite">
+  <h2>Two more legacy shortcuts go away</h2>
+  <div class="cols">
+    <div class="card"><h3>Hard-coded firms (FB-204)</h3><p>An API call, scoped by the caller's firm claim (lesson 20). Vendor staff see all firms.</p></div>
+    <div class="card"><h3>Total ignores the filter</h3><p>A server-side total for the applied filter, returned with the page of rows.</p></div>
+  </div>
+</section>
+
+<section id="dates" data-part="5" data-cue="Dates deserve a moment too">
+  <h2>Dates</h2>
+  <ul>
+    <li>Timestamps in UTC <span class="accent">with an explicit offset</span></li>
+    <li>Date-only values, like the period end, as plain dates</li>
+    <li>Formatted for display in one place</li>
+  </ul>
+  <p class="small muted" style="margin-top:28px">Lesson 11: a date without a time-zone marker is read as local time in the browser.</p>
+</section>
+
+<section id="double-click" data-part="5" data-cue="And the double-click, FB-247, gets fixed properly too">
+  <h2>The double-click (FB-247): do both</h2>
+  <div class="cols">
+    <div class="card"><h3>UX</h3><p>Disable the start button while a request is pending.</p></div>
+    <div class="card modern"><h3>The fix</h3><p>One <span class="accent">Idempotency-Key</span> per user action. A repeated key returns the original run (lesson 12).</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Authentication ───────────── -->
+<section id="same-origin" data-part="6" data-cue="Because the new app is served through the same gateway as the APIs">
+  <h2>Same origin, same cookie</h2>
+  <svg width="1640" height="320" viewBox="0 0 1640 320">
+    <defs><marker id="arrow-bff" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="90" width="380" height="150" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="190" y="158" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Angular app</text>
+    <text x="190" y="200" fill="#8ea2c0" font-size="24" text-anchor="middle">no tokens in localStorage</text>
+    <line x1="385" y1="165" x2="585" y2="165" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow-bff)"/>
+    <text x="485" y="140" fill="#38bdf8" font-size="24" text-anchor="middle">auth cookie</text>
+    <rect x="595" y="90" width="450" height="150" rx="18" fill="#121b2f" stroke="#38bdf8" stroke-width="3"/>
+    <text x="820" y="158" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Gateway</text>
+    <text x="820" y="200" fill="#8ea2c0" font-size="24" text-anchor="middle">owns sign-in (lesson 20)</text>
+    <line x1="1050" y1="165" x2="1250" y2="165" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow-bff)"/>
+    <rect x="1260" y="90" width="380" height="150" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="1450" y="175" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">APIs</text>
+  </svg>
+  <p class="muted">The cookie flows with every request, with no code at all. No token for a cross-site scripting bug to read.</p>
+</section>
+
+<section id="xsrf" data-part="6" data-cue="But cookies bring back cross-site request forgery">
+  <h2>Cookies bring back CSRF (FB-279 is still open)</h2>
+  <ol>
+    <li>Server issues a readable cookie: <span class="accent">XSRF-TOKEN</span></li>
+    <li>Angular's HttpClient echoes it in an <span class="accent">X-XSRF-TOKEN</span> header</li>
+    <li>ASP.NET Core antiforgery validates it</li>
+  </ol>
+</section>
+
+<section id="xsrf-gotchas" data-part="6" data-cue="Two gotchas">
+  <h2>Two gotchas</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Relative URLs only</h3><p>Angular attaches the header to mutating requests with relative URLs. An absolute URL silently skips it.</p></div>
+    <div class="card legacy"><h3 class="amber">JSON endpoints</h3><p>Built-in middleware validates only some endpoint types. You may need an endpoint filter calling ValidateRequestAsync. Verify for your version.</p></div>
+  </div>
+</section>
+
+<section id="unauthorized" data-part="6" data-cue="Finally, when a call returns 401">
+  <h2>401 → full-page sign-in</h2>
+  <p>Navigate the whole page to sign in, rather than showing an in-app error.</p>
+  <p class="muted">The gateway owns the sign-in flow.</p>
+</section>
+
+<!-- ───────────── Continuity and E2E ───────────── -->
+<section id="continuity" data-part="7" data-cue="Users will cross between two apps many times a day">
+  <h2>One site, two apps</h2>
+  <p>If the navbar, colours and typography change on one click, users experience the boundary as "the site broke".</p>
+  <ul class="checks">
+    <li>Shared design tokens: CSS variables for colours and spacing</li>
+    <li>An identical navbar in both apps</li>
+  </ul>
+</section>
+
+<section id="playwright" data-part="7" data-cue="Cover the journey end to end with Playwright">
+  <h2>Playwright, end to end</h2>
+  <div class="steps">
+    <div class="step on"><span class="num">1</span>Start a run</div>
+    <div class="step on"><span class="num">2</span>Watch its progress</div>
+    <div class="step on"><span class="num">3</span>Review the invoices</div>
+    <div class="step on"><span class="num">4</span>Approve</div>
+  </div>
+  <p class="muted" style="margin-top:40px">Crosses AngularJS → Angular → back. Write it against legacy first, get it green, keep it green as the screen moves.</p>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="8" data-cue="Planning to route hash URLs at the proxy">
+  <h2>Traps</h2>
+  <ul class="small">
+    <li>Routing hash URLs at the proxy: fragments never leave the browser</li>
+    <li>Relative API URLs under a sub-path</li>
+    <li>Porting FB-247 as "disable the button": the fix is server idempotency</li>
+    <li>@for over fifty thousand rows: virtual scroll plus server paging</li>
+    <li>Tokens in localStorage; and with cookies, XSRF protection is mandatory</li>
+    <li>Casing drift between the OpenAPI document and the real JSON</li>
+    <li>Copying the IE cache-busting hack: use proper Cache-Control on the server</li>
+    <li>Two different-looking apps</li>
+  </ul>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="9" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="9" data-cue="How do you migrate an AngularJS app incrementally?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">How do you migrate an AngularJS app incrementally?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="9" data-cue="With a route-level strangler behind the same gateway as the APIs">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Route-level strangler behind the same gateway as the APIs</li>
+    <li>New app owns whole screens on real paths; AngularJS keeps the rest</li>
+    <li>Full-page links across the boundary; client-side redirect for old hash bookmarks</li>
+    <li>One screen fully done, tests included; Playwright across the boundary</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="9" data-cue="ngUpgrade or route-level?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">ngUpgrade or route-level?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="9" data-cue="ngUpgrade when screens are tightly interwoven">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>ngUpgrade: tightly interwoven screens sharing in-memory state</li>
+    <li>Route-level: separate routes</li>
+    <li>Independent deploys; no two frameworks' change detection in one page</li>
+    <li>FeeBilling: separate screens, unbundled scripts → route-level, in an ADR</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="9" data-cue="How does the single-page app authenticate without storing tokens?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">How does the single-page app authenticate without storing tokens?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="9" data-cue="The gateway acts as a backend for frontend">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Gateway as backend for frontend: runs OIDC, holds the tokens</li>
+    <li>Same origin: the HttpOnly session cookie is sent automatically</li>
+    <li>XSRF token cookie, echoed in a header on mutating requests, validated by the server</li>
+    <li>Plus SameSite cookies</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="9" data-cue="How do you keep the front end and API contracts in sync?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">How do you keep the front end and API contracts in sync?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="9" data-cue="Generate the TypeScript client from the API's OpenAPI document">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Generate the TypeScript client from OpenAPI in CI</li>
+    <li>Contract drift fails the build, not the page at runtime</li>
+    <li>Test that the document matches what the serializer emits</li>
+    <li>Classic mismatch: PascalCase vs camelCase</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="9" data-cue="How do you show fifty thousand rows?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">How do you show fifty thousand rows?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="9" data-cue="Page on the server with cursor paging">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Cursor paging on the server</li>
+    <li>CDK virtual scroll viewport in the browser: only visible rows in the DOM</li>
+    <li>Never load everything and filter client-side (legacy: 40,000 invoices)</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Route-level strangler for separate screens: real paths, same gateway, independent deploys.</li>
+    <li class="item">The gateway can't see hash URLs. Route on real paths; redirect old bookmarks on the client.</li>
+    <li class="item">Standalone components, signals, built-in control flow; generate the client from OpenAPI.</li>
+    <li class="item">Fix legacy bugs properly: paging plus virtual scroll, polling that stops, server idempotency.</li>
+    <li class="item">The SPA uses the gateway's cookie, not tokens, and XSRF protection comes with it.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: use a route-level strangler for separate screens" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: the gateway can't see hash URLs" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: build with current Angular idioms" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: fix the legacy bugs properly" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: the SPA uses the gateway's cookie" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="10" data-cue="In the next lesson">
+  <div class="kicker">Next</div>
+  <h1>23 · Cutover, Shadow Runs and Decommissioning</h1>
+  <p class="lead">Switching a billing system over one firm at a time, and what rollback means once invoices have been sent.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

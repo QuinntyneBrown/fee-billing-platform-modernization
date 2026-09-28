@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-05 (parsing and staging) · **Prerequisites:** 04, 17
 
-**Audio lesson:** [18-binaryformatter-encoding-and-culture.mp3](18-binaryformatter-encoding-and-culture.mp3) · [Transcript](script.md)
+**Video:** [18-binaryformatter-encoding-and-culture.mp4](18-binaryformatter-encoding-and-culture.mp4) · [Slides](slides.html) · **Audio lesson:** [18-binaryformatter-encoding-and-culture.mp3](18-binaryformatter-encoding-and-culture.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

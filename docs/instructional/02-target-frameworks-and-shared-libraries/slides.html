@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 02 Slides</title>
+<!--
+  Slides for the lesson 02 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="02" data-lesson-title="Target Frameworks and Shared Libraries" data-parts="Introduction|The questions|Support lifecycle|Code vs ADR|.NET Standard bridge|Language vs API|Multi-targeting|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 02</div>
+  <h1>Target Frameworks and<br>Shared Libraries</h1>
+  <p class="lead">Why .NET 10, and how one library serves .NET Framework 4.7.2 and .NET 10 at once</p>
+</section>
+
+<section id="live-examples" data-part="0" data-cue="FeeBilling has a live example of each">
+  <h2>FeeBilling has a live example of each</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Which .NET?</h3><p>The new services target .NET 10. The decision record still says .NET 8.</p></div>
+    <div class="card modern"><h3>Sharing code</h3><p><b>FeeBilling.Domain</b> is compiled once and used by .NET Framework 4.7.2 and .NET 10.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>Why .NET 10 and not .NET 8?</li>
+    <li>How do legacy and new code share types during a migration?</li>
+    <li>What's the difference between .NET Standard and .NET?</li>
+    <li>Your shared library needs DateOnly, init setters or records: what now?</li>
+    <li>What would you do in your first week about the target version?</li>
+  </ul>
+</section>
+
+<section id="two-constraints" data-part="1" data-cue="Keep one idea in mind">
+  <div class="kicker">One idea to keep in mind</div>
+  <h2>A shared library has two separate constraints</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Language version</h3><p>The C# the library is <b>compiled with</b>.</p></div>
+    <div class="card legacy"><h3 class="amber">API surface</h3><p>The APIs it is <b>compiled against</b>.</p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">People mix these up. That difference is exactly what the interviewer is probing for.</p>
+</section>
+
+<!-- ───────────── Support lifecycle ───────────── -->
+<section id="cadence" data-part="2" data-cue="Start with how .NET is released">
+  <h2>How .NET is released</h2>
+  <ul>
+    <li>A new major version <b>every November</b> since .NET 5</li>
+    <li>Even numbers are <span class="accent">LTS</span>: three years of patches</li>
+    <li>Odd numbers are <span class="amber">STS</span>: extended to 24 months, per the training plan</li>
+  </ul>
+  <p class="small muted" style="margin-top:36px">All dates as of September 2026. Check Microsoft's support policy page before quoting them.</p>
+</section>
+
+<section id="dates" data-part="2" data-cue="Here are the dates that matter for FeeBilling">
+  <h2>The dates that matter for FeeBilling</h2>
+  <div class="cols3">
+    <div class="card legacy"><h3 class="amber">.NET 8 · LTS</h3><p>Support ends<br><b>November 10, 2026</b></p><p class="small muted">About two months away</p></div>
+    <div class="card modern"><h3>.NET 10 · LTS</h3><p>Released November 2025<br>Supported to <b>November 2028</b></p></div>
+    <div class="card"><h3 class="muted">.NET Framework 4.7.2 · 4.8 · 4.8.1</h3><p>Windows components, on the Windows lifecycle</p><p class="small muted">Not dying, but frozen. 4.8.1 is the last version.</p></div>
+  </div>
+</section>
+
+<section id="why-10" data-part="2" data-cue="So why .NET 10 and not .NET 8?">
+  <div class="kicker">Why .NET 10 and not .NET 8?</div>
+  <p class="quote">Start on .NET 8 today and you upgrade again within months, <span class="amber">in the middle of the first migration</span>.</p>
+  <p class="muted" style="margin-top:40px">Wasted effort, and wasted risk.</p>
+</section>
+
+<section id="upgrade-first" data-part="2" data-cue="There's a useful follow-up point">
+  <h2>Already on .NET 8? Upgrade that first</h2>
+  <div class="cols">
+    <div class="card modern"><h3>.NET 8 → .NET 10</h3><p>Mostly a target framework change and package bumps. Cheap.</p></div>
+    <div class="card legacy"><h3 class="amber">.NET Framework → .NET 10</h3><p>The real project.</p></div>
+  </div>
+  <ul style="margin-top:36px">
+    <li>A quick win that builds the upgrade pipeline everyone follows</li>
+    <li>Budget an LTS-to-LTS upgrade <b>every two years</b>: routine, not a project</li>
+  </ul>
+</section>
+
+<!-- ───────────── Code vs ADR ───────────── -->
+<section id="adr-0002" data-part="3" data-cue="Open docs/adr/0002-target-dotnet-version.md">
+  <h2>What the decision record says</h2>
+  <div class="file">docs/adr/0002-target-dotnet-version.md</div>
+  <pre class="code" data-lang="md" data-mark="2,6">| .NET 8 | LTS | November 10, 2026 |
+| .NET 9 | STS | May 2026 |
+…
+## Decision
+
+- New services target **.NET 8 (LTS)**.
+- Shared libraries consumed by legacy target **`netstandard2.0`** until no .NET Framework project references them.</pre>
+  <p class="muted">.NET 9's end date has moved since this was written, too.</p>
+</section>
+
+<section id="git-grep" data-part="3" data-cue="Now run a git grep for the TargetFramework property">
+  <h2>What the code says</h2>
+  <pre class="code tight" data-lang="sh" data-mark="2,3">$ git grep -n -o "&lt;TargetFramework&gt;[^&lt;]*" -- src tests tools
+src/FeeBilling.Accounts.Api/FeeBilling.Accounts.Api.csproj:4:&lt;TargetFramework&gt;net10.0
+src/FeeBilling.Domain/FeeBilling.Domain.csproj:8:&lt;TargetFramework&gt;netstandard2.0
+src/FeeBilling.Gateway/FeeBilling.Gateway.csproj:4:&lt;TargetFramework&gt;net10.0
+src/FeeBilling.Infrastructure/FeeBilling.Infrastructure.csproj:4:&lt;TargetFramework&gt;net10.0
+src/FeeBilling.ServiceDefaults/FeeBilling.ServiceDefaults.csproj:4:&lt;TargetFramework&gt;net10.0
+tests/FeeBilling.Accounts.Api.Tests/FeeBilling.Accounts.Api.Tests.csproj:4:&lt;TargetFramework&gt;net10.0
+tests/FeeBilling.Domain.Tests/FeeBilling.Domain.Tests.csproj:4:&lt;TargetFramework&gt;net10.0
+tools/FeeBilling.DbInit/FeeBilling.DbInit.csproj:5:&lt;TargetFramework&gt;net10.0</pre>
+  <p class="amber">The code moved on. The decision record didn't. <span class="muted small">(Domain is netstandard2.0 on purpose: more on that shortly.)</span></p>
+</section>
+
+<section id="must-agree" data-part="3" data-cue="That's handover issue number one">
+  <div class="kicker">Handover issue #1</div>
+  <p class="quote">The code and the record must agree. When they don't, fix whichever one is wrong, and <span class="accent">write down why</span>.</p>
+  <p class="muted" style="margin-top:40px">First week: check what the code actually targets, not what the ADR says.</p>
+</section>
+
+<section id="supersede" data-part="3" data-cue="The way to fix an accepted ADR is to supersede it">
+  <h2>Supersede, don't edit</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="md" data-mark="2"># ADR-0005: Target .NET 10 for migrated services
+- **Status:** Accepted · supersedes ADR-0002
+
+- New services target .NET 10 (LTS).
+- Shared libraries stay on netstandard2.0 until the last Framework consumer is retired.
+- Plan an LTS-to-LTS upgrade every two years.</pre>
+  <pre class="code" data-lang="md" data-mark="2"># ADR-0002: Target .NET version for migrated services
+- **Status:** Superseded by ADR-0005</pre>
+  <p class="small muted">The old decision stays as written: it records why .NET 8 was reasonable in March 2025.</p>
+</section>
+
+<!-- ───────────── .NET Standard as a bridge ───────────── -->
+<section id="standard-definition" data-part="4" data-cue=".NET Standard as a bridge">
+  <h2>.NET Standard is a contract, not a runtime</h2>
+  <div class="cols">
+    <div class="card modern"><h3>The contract</h3><p>A versioned list of APIs that implementations promise to provide.</p></div>
+    <div class="card"><h3>The implementations</h3><p>.NET Framework, modern .NET, Mono, Xamarin</p></div>
+  </div>
+  <p style="margin-top:36px">A <span class="accent">netstandard2.0</span> library runs on any implementation that supports version 2.0 of the contract.</p>
+</section>
+
+<section id="why-two-oh" data-part="4" data-cue="Why version 2.0 specifically?">
+  <h2>Why 2.0 specifically?</h2>
+  <table>
+    <tr><th>Version</th><th>.NET Framework</th><th>Modern .NET</th></tr>
+    <tr><td>netstandard2.0</td><td><span class="green">Yes</span>: the highest version Framework implements</td><td><span class="green">Yes</span></td></tr>
+    <tr><td>netstandard2.1</td><td><span class="red">Never implemented</span></td><td><span class="green">Yes</span></td></tr>
+    <tr><td>netstandard2.2</td><td colspan="2" class="muted">Won't exist: .NET Standard is frozen</td></tr>
+  </table>
+  <p style="margin-top:36px">New code targets <span class="accent">net10.0</span>. netstandard2.0 survives only as the bridge to .NET Framework.</p>
+</section>
+
+<section id="framework-versions" data-part="4" data-cue="There's a version detail worth knowing">
+  <h2>A version detail worth knowing</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">.NET Framework 4.6.1 – 4.7.1</h3><p>Claimed netstandard2.0 through shim assemblies. Binding-redirect pain.</p></div>
+    <div class="card modern"><h3>.NET Framework 4.7.2+</h3><p>Support is built in.</p><p class="small green">FeeBilling runs on 4.7.2: the right side of the line.</p></div>
+  </div>
+</section>
+
+<section id="domain-csproj" data-part="4" data-cue="Open src/FeeBilling.Domain/FeeBilling.Domain.csproj">
+  <h2>The bridge, with its exit plan</h2>
+  <div class="file">src/FeeBilling.Domain/FeeBilling.Domain.csproj</div>
+  <pre class="code" data-lang="xml" data-mark="4,5,8">&lt;Project Sdk="Microsoft.NET.Sdk"&gt;
+
+  &lt;!--
+    Shared between the legacy .NET Framework solution and the new .NET 10 services during the
+    transition, hence netstandard2.0. Retarget to net10.0 once no Framework project references it.
+  --&gt;
+  &lt;PropertyGroup&gt;
+    &lt;TargetFramework&gt;netstandard2.0&lt;/TargetFramework&gt;
+    &lt;RootNamespace&gt;FeeBilling.Domain&lt;/RootNamespace&gt;
+  &lt;/PropertyGroup&gt;
+
+&lt;/Project&gt;</pre>
+</section>
+
+<section id="one-source" data-part="4" data-cue="Now look at the two solution files">
+  <h2>One source, two consumers</h2>
+  <svg width="1640" height="330" viewBox="0 0 1640 330">
+    <defs><marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="10" width="560" height="130" rx="18" fill="#221b0d" stroke="#f5b544" stroke-width="3"/>
+    <text x="280" y="64" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">legacy/FeeBilling.sln</text>
+    <text x="280" y="106" fill="#8ea2c0" font-size="26" text-anchor="middle">FeeBilling.Core · net472</text>
+    <rect x="1080" y="10" width="560" height="130" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="1360" y="64" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">FeeBilling.Modern.slnx</text>
+    <text x="1360" y="106" fill="#8ea2c0" font-size="26" text-anchor="middle">.NET 10 services and tests</text>
+    <line x1="400" y1="145" x2="590" y2="196" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow)"/>
+    <line x1="1240" y1="145" x2="1050" y2="196" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="560" y="200" width="520" height="120" rx="18" fill="#121b2f" stroke="#38bdf8" stroke-width="3"/>
+    <text x="820" y="252" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">FeeBilling.Domain</text>
+    <text x="820" y="292" fill="#38bdf8" font-size="26" text-anchor="middle">netstandard2.0</text>
+  </svg>
+  <div class="file" style="margin-top:28px">legacy/FeeBilling.Core/FeeBilling.Core.csproj</div>
+  <pre class="code" data-lang="xml" data-mark="1">&lt;ProjectReference Include="..\..\src\FeeBilling.Domain\FeeBilling.Domain.csproj" /&gt;</pre>
+</section>
+
+<section id="guardrail" data-part="4" data-cue="There's a bonus to netstandard2.0 that's easy to miss">
+  <h2>A bonus: netstandard2.0 is a guardrail</h2>
+  <ul>
+    <li><span class="accent">System.Web</span> isn't part of netstandard2.0</li>
+    <li>So the shared library physically can't reach for <span class="amber">HttpContext.Current</span>, the way FeeBilling.Core does</li>
+    <li>Target it at net472 "because legacy needs it" and you lose that protection</li>
+    <li>Compatibility packages (like the one that brings ConfigurationManager to modern targets) quietly reopen the door</li>
+  </ul>
+</section>
+
+<!-- ───────────── Language version vs API surface ───────────── -->
+<section id="il" data-part="5" data-cue="Consumers of a library see compiled IL, not C# syntax.">
+  <div class="kicker">Language version vs API surface</div>
+  <p class="quote">Consumers of a library see <span class="accent">compiled IL</span>, not C# syntax.</p>
+  <p class="muted" style="margin-top:40px">The library's language version mostly doesn't matter to them. Its API surface does.</p>
+</section>
+
+<section id="build-props" data-part="5" data-cue="Look at the build settings">
+  <div class="file">legacy/Directory.Build.props</div>
+  <pre class="code tight" data-lang="xml" data-mark="4,5,9">&lt;!--
+  Legacy solution, as found.
+
+  Deliberately does NOT import the repo-root Directory.Build.props: no nullable, no
+  warnings-as-errors, C# 7.3 (what VS2017-era .NET Framework 4.7.2 projects compiled with).
+  …
+--&gt;
+&lt;PropertyGroup&gt;
+  &lt;LangVersion&gt;7.3&lt;/LangVersion&gt;</pre>
+  <div class="file">Directory.Build.props (repo root; FeeBilling.Domain lives under src/, so it picks this up)</div>
+  <pre class="code tight" data-lang="xml" data-mark="1,2">&lt;LangVersion&gt;latest&lt;/LangVersion&gt;
+&lt;Nullable&gt;enable&lt;/Nullable&gt;
+&lt;TreatWarningsAsErrors&gt;true&lt;/TreatWarningsAsErrors&gt;</pre>
+</section>
+
+<section id="account-aum" data-part="5" data-cue="Now open src/FeeBilling.Domain/ValueObjects/AccountAum.cs">
+  <h2>"C# 7.3-friendly", in C# 10 syntax</h2>
+  <div class="file">src/FeeBilling.Domain/ValueObjects/AccountAum.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,5,10">namespace FeeBilling.Domain.ValueObjects;
+
+/// &lt;summary&gt;
+/// An account's billable AUM (after exclusions) on the billing date.
+/// Legacy HouseholdAllocator consumes this type, so it has to stay C# 7.3-friendly.
+/// &lt;/summary&gt;
+public sealed class AccountAum : IEquatable&lt;AccountAum&gt;
+{
+    // …
+    public bool Equals(AccountAum? other) => other is not null &amp;&amp; AccountId == other.AccountId // …</pre>
+  <p class="small muted">File-scoped namespace: C# 10. <span class="accent">is not null</span>: C# 9.</p>
+</section>
+
+<section id="not-a-contradiction" data-part="5" data-cue="Is that a contradiction? No.">
+  <h2>Not a contradiction</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Compiler features</h3><p>File-scoped namespaces, <b>is not null</b>: compile to ordinary IL. The C# 7.3 consumer never sees them.</p></div>
+    <div class="card legacy"><h3 class="amber">The type's public shape</h3><p>Must be something a C# 7.3 project can use. That's what the comment really means.</p></div>
+  </div>
+</section>
+
+<section id="nullable" data-part="5" data-cue="Nullable annotations are similar">
+  <h2>Nullable annotations don't protect legacy callers</h2>
+  <ul>
+    <li>The compiler emits attributes</li>
+    <li>A C# 7.3 consumer simply ignores them</li>
+    <li class="amber">Legacy code gets no warning for passing null</li>
+  </ul>
+</section>
+
+<template id="leaks">
+  <h2>What leaks through</h2>
+  <div class="cols3">
+    <div class="card item"><h3>init setters · records</h3><p class="small">Need an <b>IsExternalInit</b> polyfill. C# 7.3 still can't call an init setter.</p></div>
+    <div class="card item"><h3>required members</h3><p class="small">Need polyfills; older compilers are blocked from those constructors.</p></div>
+    <div class="card item"><h3>DateOnly · TimeOnly</h3><p class="small">Not in netstandard2.0. Use DateTime with a date-only convention.</p></div>
+    <div class="card item"><h3>TimeProvider</h3><p class="small">Microsoft.Bcl.TimeProvider package, or better: keep the clock out of the domain.</p></div>
+    <div class="card item"><h3>Default interface members</h3><p class="small">Need runtime support Framework lacks. Use an abstract base or extension methods.</p></div>
+    <div class="card item"><h3>Span&lt;T&gt; and friends</h3><p class="small">Come in through packages like System.Memory, and every package ships to IIS.</p></div>
+  </div>
+</template>
+<section id="leaks-0" data-part="5" data-cue="So what does leak through?" data-template="leaks"></section>
+<section id="leaks-1" data-part="5" data-cue="Init-only setters and records compile on netstandard2.0" data-template="leaks" data-highlight="1"></section>
+<section id="leaks-2" data-part="5" data-cue="Required members need polyfills too" data-template="leaks" data-highlight="2"></section>
+<section id="leaks-3" data-part="5" data-cue="DateOnly and TimeOnly don't exist in netstandard2.0 at all" data-template="leaks" data-highlight="3"></section>
+
+<section id="billing-period" data-part="5" data-cue="BillingPeriod does exactly that">
+  <h2>The date-only convention in practice</h2>
+  <div class="file">src/FeeBilling.Domain/ValueObjects/BillingPeriod.cs</div>
+  <pre class="code" data-lang="cs" data-mark="2,8,9">/// An inclusive date range that is billed as one period (normally a calendar quarter).
+/// Times are ignored; only the date parts are kept.
+public sealed class BillingPeriod : IEquatable&lt;BillingPeriod&gt;
+{
+    public BillingPeriod(DateTime start, DateTime end)
+    {
+        // …
+        Start = start.Date;
+        End = end.Date;
+    }</pre>
+</section>
+
+<section id="leaks-4" data-part="5" data-cue="TimeProvider isn't in the netstandard2.0 base library" data-template="leaks" data-highlight="4"></section>
+<section id="leaks-5" data-part="5" data-cue="Default interface members need runtime support" data-template="leaks" data-highlight="5"></section>
+<section id="leaks-6" data-part="5" data-cue="And Span of T and related types come in through packages" data-template="leaks" data-highlight="6"></section>
+
+<section id="package-cost" data-part="5" data-cue="Which brings up a subtle cost">
+  <h2>Every Domain package ships to IIS</h2>
+  <ul>
+    <li>Each package FeeBilling.Domain references becomes a dependency of the <span class="amber">legacy IIS application</span></li>
+    <li>Binding redirects there are a classic source of runtime <b>FileLoadException</b></li>
+    <li>So every package added to Domain has to be justified</li>
+  </ul>
+  <div class="file" style="margin-top:28px">legacy/Directory.Build.props</div>
+  <pre class="code" data-lang="xml">&lt;AutoGenerateBindingRedirects&gt;true&lt;/AutoGenerateBindingRedirects&gt;</pre>
+</section>
+
+<!-- ───────────── Multi-targeting and pinning the SDK ───────────── -->
+<section id="multi-target" data-part="6" data-cue="Sometimes the modern services need an API">
+  <h2>Multi-targeting</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="xml" data-mark="2">&lt;PropertyGroup&gt;
+  &lt;TargetFrameworks&gt;netstandard2.0;net10.0&lt;/TargetFrameworks&gt;
+&lt;/PropertyGroup&gt;</pre>
+  <div class="cols">
+    <div class="card modern"><h3>net10.0 build</h3><p>Used by the modern services</p></div>
+    <div class="card legacy"><h3 class="amber">netstandard2.0 build</h3><p>Used by legacy</p></div>
+  </div>
+</section>
+
+<section id="conditional" data-part="6" data-cue="Inside the code, you use a conditional compilation block">
+  <h2>Different implementation, same API</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="cs" data-mark="4,6">public static void NotNull(object? value, string name)
+{
+#if NET
+    ArgumentNullException.ThrowIfNull(value, name);
+#else
+    if (value is null) throw new ArgumentNullException(name);
+#endif
+}</pre>
+</section>
+
+<section id="same-meaning" data-part="6" data-cue="The rule is: use conditional compilation for implementation differences only">
+  <h2>The rule</h2>
+  <ul class="checks">
+    <li>Conditional compilation for <b>implementation</b> differences only</li>
+    <li>Public API identical across targets</li>
+    <li>Behaviour identical across targets</li>
+  </ul>
+</section>
+
+<section id="behaviour-trap" data-part="6" data-cue="Here's a behavioural trap">
+  <h2>A behavioural trap</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="cs" data-mark="2,4">#if NET
+    var day = DateOnly.FromDateTime(value).ToDateTime(TimeOnly.MinValue); // Kind = Unspecified
+#else
+    var day = value.Date;                                                 // Kind unchanged
+#endif</pre>
+  <p>Same method, same signature, <span class="amber">different behaviour</span>: the date-off-by-one bug from lesson 11.</p>
+</section>
+
+<section id="drop-it" data-part="6" data-cue="When do you drop netstandard2.0?">
+  <h2>When do you drop netstandard2.0?</h2>
+  <p>When the last <span class="amber">net472</span> consumer is retired:</p>
+  <ul class="checks">
+    <li>Retarget FeeBilling.Domain to net10.0</li>
+    <li>Delete the polyfills</li>
+    <li>Use modern APIs freely</li>
+  </ul>
+  <p class="muted" style="margin-top:28px">Put it on the decommission checklist, so the transition tool doesn't become permanent.</p>
+</section>
+
+<section id="global-json" data-part="6" data-cue="One more piece of build hygiene: pin the SDK">
+  <h2>Pin the SDK</h2>
+  <div class="file">global.json</div>
+  <pre class="code" data-lang="json" data-mark="3,4">{
+  "sdk": {
+    "version": "10.0.401",
+    "rollForward": "latestFeature",
+    "allowPrerelease": false
+  }
+}</pre>
+  <p class="muted">A newer 10.0 feature band or patch is fine. .NET 11 never is.</p>
+</section>
+
+<section id="ci-sdk" data-part="6" data-cue="And the CI workflow">
+  <h2>One file controls the SDK everywhere</h2>
+  <div class="file">.github/workflows/ci.yml · both the legacy and the modern job</div>
+  <pre class="code" data-lang="yaml" data-mark="3">      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json</pre>
+  <p class="muted">Local builds and CI builds use the same major SDK.</p>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="7" data-cue="Here are the traps to name.">
+  <h2>Traps</h2>
+  <ul>
+    <li>Trusting the ADR over the code, or the code over the ADR</li>
+    <li>Editing an accepted ADR's decision in place</li>
+    <li>Targeting the shared library at net472 "because legacy needs it"</li>
+    <li>Adding packages to Domain casually</li>
+    <li>Letting the two targets of a multi-targeted library diverge</li>
+    <li>Keeping netstandard2.0 forever</li>
+  </ul>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="8" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="8" data-cue="Why .NET 10 and not .NET 8?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">Why .NET 10 and not .NET 8?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="8" data-cue="As of September 2026, .NET 8 support ends">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>.NET 8 support ends November 10, 2026; .NET 10 is LTS until November 2028</li>
+    <li>Starting on .NET 8 means a second upgrade mid-migration</li>
+    <li>Move anything already on .NET 8 first: cheap, and it builds the upgrade pipeline</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="8" data-cue="How do legacy and new code share types during a migration?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">How do legacy and new code share types during a migration?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="8" data-cue="I'd extract the shared types into a library">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>A shared library targeting <span class="accent">netstandard2.0</span>: Framework 4.7.2+ and .NET 10 both reference it</li>
+    <li>No System.Web, Entity Framework or logging, and netstandard2.0 helps enforce it</li>
+    <li>FeeBilling.Domain appears in both solutions</li>
+    <li>Retarget to net10.0 when the last Framework consumer is gone</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="8" data-cue="What's the difference between .NET Standard and .NET?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">What's the difference between .NET Standard and .NET?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="8" data-cue=".NET Standard is a versioned contract">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>.NET Standard: a versioned API contract</li>
+    <li>.NET Framework, modern .NET, Mono: implementations</li>
+    <li>Frozen at 2.1; Framework only implements 2.0</li>
+    <li>New code targets net10.0; netstandard2.0 is just the bridge</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="8" data-cue="Your shared library needs DateOnly, init setters or records. What now?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">Your shared library needs DateOnly, init setters or records. What now?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="8" data-cue="DateOnly isn't available on netstandard2.0">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>DateOnly: use DateTime with a date-only convention, like BillingPeriod</li>
+    <li>Init setters and records: IsExternalInit polyfill, but not on types legacy constructs</li>
+    <li>Genuinely need newer APIs? Multi-target netstandard2.0 and net10.0</li>
+    <li>Identical public API and behaviour; differences behind conditional compilation</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="8" data-cue="What would you do in your first week about the target version?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">What would you do in your first week about the target version?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="8" data-cue="Check what the code actually targets, not what the ADR says.">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Check the code: every modern project targets net10.0, ADR-0002 still says .NET 8</li>
+    <li>Write a new ADR that supersedes it: .NET 10 for services, netstandard2.0 for shared libraries</li>
+    <li>Record the reason: .NET 8's end-of-support date</li>
+    <li>Confirm global.json pins the SDK locally and in CI</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Target <b>.NET 10</b>: .NET 8 ends November 10, 2026; .NET 10 runs to November 2028.</li>
+    <li class="item">Code and ADR disagree? Fix the wrong one. Supersede the ADR, don't edit it.</li>
+    <li class="item">.NET Standard is a contract. netstandard2.0 is the bridge, and a guardrail against System.Web.</li>
+    <li class="item">Language version ≠ API surface: compiler features are free; init, DateOnly, default interface members aren't.</li>
+    <li class="item">Multi-target with identical API and behaviour, pin the SDK, plan the day you drop netstandard2.0.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="9" data-cue="Five things to remember" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="9" data-cue="One: target .NET 10" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="9" data-cue="Two: when the code and the ADR disagree" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="9" data-cue="Three: .NET Standard is a contract" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="9" data-cue="Four: language version and API surface" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="9" data-cue="Five: multi-target only" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="9" data-cue="In the next lesson">
+  <div class="kicker">Next</div>
+  <h1>03 · Project System and Dependency Assessment</h1>
+  <p class="lead">How the projects build, which packages they pull in, and which of those are vulnerable, Framework-only, or carry licence terms you can't accept.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

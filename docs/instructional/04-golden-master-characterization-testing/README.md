@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-01 · **Prerequisites:** 01, 02
 
-**Audio lesson:** [04-golden-master-characterization-testing.mp3](04-golden-master-characterization-testing.mp3) · [Transcript](script.md)
+**Video:** [04-golden-master-characterization-testing.mp4](04-golden-master-characterization-testing.mp4) · [Slides](slides.html) · **Audio lesson:** [04-golden-master-characterization-testing.mp3](04-golden-master-characterization-testing.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

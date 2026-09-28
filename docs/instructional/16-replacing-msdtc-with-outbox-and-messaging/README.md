@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-04 (consistency and messaging) · **Prerequisites:** 15
 
-**Audio lesson:** [16-replacing-msdtc-with-outbox-and-messaging.mp3](16-replacing-msdtc-with-outbox-and-messaging.mp3) · [Transcript](script.md)
+**Video:** [16-replacing-msdtc-with-outbox-and-messaging.mp4](16-replacing-msdtc-with-outbox-and-messaging.mp4) · [Slides](slides.html) · **Audio lesson:** [16-replacing-msdtc-with-outbox-and-messaging.mp3](16-replacing-msdtc-with-outbox-and-messaging.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

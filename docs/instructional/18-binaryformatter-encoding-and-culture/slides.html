@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 18 Slides</title>
+<!--
+  Slides for the lesson 18 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="18" data-lesson-title="BinaryFormatter, Encoding and Culture" data-parts="Introduction|The questions|Eight lines of ingestion|BinaryFormatter|Encoding.Default|Culture|Parsing by specification|More breakers + tests|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 18</div>
+  <h1>BinaryFormatter,<br>Encoding and Culture</h1>
+  <p class="lead">The breaks that compile, run, pass shallow tests, and corrupt data</p>
+</section>
+
+<section id="loud-vs-silent" data-part="0" data-cue="The loud breaks, like a missing System.Web">
+  <h2>Loud breaks and silent breaks</h2>
+  <div class="cols">
+    <div class="card"><h3>Loud</h3><p>No System.Web, no WCF server. The build stops. You can't miss them.</p></div>
+    <div class="card legacy"><h3 class="amber">Silent</h3><p>Compile, run, pass shallow tests, and <span class="red">corrupt data</span>.</p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">FeeBilling's custodian ingestion has three of them in eight lines of code.</p>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="Here's what you'll be ready for">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>What breaks silently when moving to modern .NET?</li>
+    <li>Why is BinaryFormatter dangerous?</li>
+    <li>How do you migrate data serialized with BinaryFormatter?</li>
+    <li>How do you parse numbers from files safely?</li>
+  </ul>
+</section>
+
+<section id="seed-files" data-part="1" data-cue="The running example is the French-Canadian seed file">
+  <h2>The running example</h2>
+  <div class="file">seed/custodian-files/</div>
+  <div class="cols">
+    <div class="card"><h3>NBIN_20260930_POS.txt</h3><p>Invariant numbers: <span class="accent">1052590.68</span></p></div>
+    <div class="card legacy"><h3 class="amber">NBIN_20260930_POS_FR.txt</h3><p>French-Canadian numbers: <span class="amber">1 052 590,68</span></p></div>
+  </div>
+  <div class="file" style="margin-top:36px">.gitattributes</div>
+  <pre class="code" data-lang="sh"># Custodian files are byte-exact test fixtures (Windows-1252, CRLF). Never normalize.
+seed/custodian-files/** binary</pre>
+  <p class="muted small">Same bytes, three results depending on runtime and culture. Twice with no exception.</p>
+</section>
+
+<!-- ───────────── Eight lines ───────────── -->
+<section id="submit" data-part="2" data-cue="Open legacy/FeeBilling.Ingestion.Wcf/CustodianFeedService.svc.cs and find SubmitPositionFile">
+  <div class="file">legacy/FeeBilling.Ingestion.Wcf/CustodianFeedService.svc.cs</div>
+  <pre class="code tight" data-lang="cs">public FeedReceipt SubmitPositionFile(string custodianCode, string fileName, byte[] content)
+{
+    var lines = Encoding.Default.GetString(content).Split('\n');   // Encoding.Default differs on .NET Core
+    var positions = lines.Skip(1).Select(l => new Position
+    {
+        AccountNumber = l.Substring(0, 12).Trim(),
+        MarketValue   = decimal.Parse(l.Substring(40, 18)),        // culture-dependent; fr-CA servers break
+        AsOfDate      = DateTime.Parse(l.Substring(58, 10))        // same
+    }).ToList();
+
+    var formatter = new BinaryFormatter();                         // removed in .NET 9
+    using (var ms = new MemoryStream())
+    {
+        formatter.Serialize(ms, positions);
+        _db.StagedBatches.Add(new StagedBatch { Payload = ms.ToArray(), Status = "Received" });
+    }</pre>
+</section>
+
+<section id="step-decode" data-part="2" data-cue="First, it turns the file's bytes into text">
+  <div class="kicker">1 · Bytes to text</div>
+  <div class="file">legacy/FeeBilling.Ingestion.Wcf/CustodianFeedService.svc.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="3">public FeedReceipt SubmitPositionFile(string custodianCode, string fileName, byte[] content)
+{
+    var lines = Encoding.Default.GetString(content).Split('\n');   // Encoding.Default differs on .NET Core
+    var positions = lines.Skip(1).Select(l => new Position
+    {
+        AccountNumber = l.Substring(0, 12).Trim(),
+        MarketValue   = decimal.Parse(l.Substring(40, 18)),        // culture-dependent; fr-CA servers break
+        AsOfDate      = DateTime.Parse(l.Substring(58, 10))        // same
+    }).ToList();
+
+    var formatter = new BinaryFormatter();                         // removed in .NET 9
+    using (var ms = new MemoryStream())
+    {
+        formatter.Serialize(ms, positions);
+        _db.StagedBatches.Add(new StagedBatch { Payload = ms.ToArray(), Status = "Received" });
+    }</pre>
+</section>
+
+<section id="step-slice" data-part="2" data-cue="Second, it skips the header line">
+  <div class="kicker">2 · Skip the header, slice at fixed offsets</div>
+  <div class="file">legacy/FeeBilling.Ingestion.Wcf/CustodianFeedService.svc.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="4,6,7,8">public FeedReceipt SubmitPositionFile(string custodianCode, string fileName, byte[] content)
+{
+    var lines = Encoding.Default.GetString(content).Split('\n');   // Encoding.Default differs on .NET Core
+    var positions = lines.Skip(1).Select(l => new Position
+    {
+        AccountNumber = l.Substring(0, 12).Trim(),
+        MarketValue   = decimal.Parse(l.Substring(40, 18)),        // culture-dependent; fr-CA servers break
+        AsOfDate      = DateTime.Parse(l.Substring(58, 10))        // same
+    }).ToList();
+
+    var formatter = new BinaryFormatter();                         // removed in .NET 9
+    using (var ms = new MemoryStream())
+    {
+        formatter.Serialize(ms, positions);
+        _db.StagedBatches.Add(new StagedBatch { Payload = ms.ToArray(), Status = "Received" });
+    }</pre>
+</section>
+
+<section id="step-parse" data-part="2" data-cue="Third, it parses the market value">
+  <div class="kicker">3 · Parse with no culture argument</div>
+  <div class="file">legacy/FeeBilling.Ingestion.Wcf/CustodianFeedService.svc.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="7,8">public FeedReceipt SubmitPositionFile(string custodianCode, string fileName, byte[] content)
+{
+    var lines = Encoding.Default.GetString(content).Split('\n');   // Encoding.Default differs on .NET Core
+    var positions = lines.Skip(1).Select(l => new Position
+    {
+        AccountNumber = l.Substring(0, 12).Trim(),
+        MarketValue   = decimal.Parse(l.Substring(40, 18)),        // culture-dependent; fr-CA servers break
+        AsOfDate      = DateTime.Parse(l.Substring(58, 10))        // same
+    }).ToList();
+
+    var formatter = new BinaryFormatter();                         // removed in .NET 9
+    using (var ms = new MemoryStream())
+    {
+        formatter.Serialize(ms, positions);
+        _db.StagedBatches.Add(new StagedBatch { Payload = ms.ToArray(), Status = "Received" });
+    }</pre>
+</section>
+
+<section id="step-stage" data-part="2" data-cue="Fourth, it serializes the list of positions">
+  <div class="kicker">4 · BinaryFormatter into StagedBatches</div>
+  <div class="file">legacy/FeeBilling.Ingestion.Wcf/CustodianFeedService.svc.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="11,14,15">public FeedReceipt SubmitPositionFile(string custodianCode, string fileName, byte[] content)
+{
+    var lines = Encoding.Default.GetString(content).Split('\n');   // Encoding.Default differs on .NET Core
+    var positions = lines.Skip(1).Select(l => new Position
+    {
+        AccountNumber = l.Substring(0, 12).Trim(),
+        MarketValue   = decimal.Parse(l.Substring(40, 18)),        // culture-dependent; fr-CA servers break
+        AsOfDate      = DateTime.Parse(l.Substring(58, 10))        // same
+    }).ToList();
+
+    var formatter = new BinaryFormatter();                         // removed in .NET 9
+    using (var ms = new MemoryStream())
+    {
+        formatter.Serialize(ms, positions);
+        _db.StagedBatches.Add(new StagedBatch { Payload = ms.ToArray(), Status = "Received" });
+    }</pre>
+</section>
+
+<section id="process-pending" data-part="2" data-cue="Later, ProcessPendingBatches reads each staged payload back">
+  <h2>ProcessPendingBatches</h2>
+  <div class="file">legacy/FeeBilling.Ingestion.Wcf/CustodianFeedService.svc.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1,6">positions = (List&lt;Position&gt;)formatter.Deserialize(ms);   // trusts whatever is in the column
+// …
+catch (Exception ex)
+{
+    // One bad line fails the whole batch.
+    Log.Error("Batch " + batch.Id + " failed", ex);
+    batch.Status = "Failed";
+}</pre>
+</section>
+
+<section id="three-problems" data-part="2" data-cue="Let's take the three problems in turn.">
+  <h2>Three silent breakers</h2>
+  <div class="cols3">
+    <div class="card legacy"><h3 class="amber">BinaryFormatter</h3><p>Remote code execution risk. Removed in .NET 9.</p></div>
+    <div class="card legacy"><h3 class="amber">Encoding.Default</h3><p>ANSI code page on Framework. UTF-8 on modern .NET.</p></div>
+    <div class="card legacy"><h3 class="amber">Culture</h3><p>Parsing follows the thread's current culture.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── BinaryFormatter ───────────── -->
+<section id="nrbf" data-part="3" data-cue="BinaryFormatter is .NET's original binary serializer.">
+  <h2>The payload names the types</h2>
+  <svg width="1640" height="400" viewBox="0 0 1640 400">
+    <defs><marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="100" width="560" height="200" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="280" y="160" fill="#e8eef8" font-size="34" font-weight="600" text-anchor="middle">NRBF payload bytes</text>
+    <text x="280" y="210" fill="#f5b544" font-size="26" text-anchor="middle">type: FeeBilling.Ingestion.Wcf.Position</text>
+    <text x="280" y="250" fill="#8ea2c0" font-size="26" text-anchor="middle">+ field values</text>
+    <line x1="570" y1="200" x2="820" y2="200" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="695" y="180" fill="#8ea2c0" font-size="24" text-anchor="middle">Deserialize</text>
+    <rect x="830" y="100" width="810" height="200" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="1235" y="175" fill="#e8eef8" font-size="34" font-weight="600" text-anchor="middle">BinaryFormatter instantiates</text>
+    <text x="1235" y="225" fill="#8ea2c0" font-size="28" text-anchor="middle">whatever type the bytes name</text>
+  </svg>
+</section>
+
+<section id="gadget-chains" data-part="3" data-cue="That's why it's dangerous.">
+  <h2>Why it's dangerous</h2>
+  <ul>
+    <li>Attacker controls the bytes → chooses which types are created, in what state</li>
+    <li><b>Gadget chains:</b> ordinary framework types whose constructors and callbacks combine to run code</li>
+    <li>Deserializing untrusted BinaryFormatter data = <span class="red">remote code execution</span></li>
+    <li>No configuration makes it safe on untrusted input</li>
+  </ul>
+</section>
+
+<section id="trust-boundary" data-part="3" data-cue="People push back with: but it's our own database.">
+  <p class="quote">"But it's our own database."</p>
+  <p style="margin-top:48px">Not a trust boundary. Anyone who can write to <span class="accent">StagedBatches</span> can run code in the ingestion process:</p>
+  <ul>
+    <li>SQL injection somewhere else</li>
+    <li>A compromised account</li>
+    <li>A misconfigured tool</li>
+  </ul>
+</section>
+
+<section id="timeline" data-part="3" data-cue="The timeline is worth knowing.">
+  <h2>The timeline</h2>
+  <div class="timeline">
+    <div class="card"><h3>.NET 5</h3><p>Marked obsolete</p></div>
+    <div class="card"><h3>Later releases</h3><p>An error by default in more project types</p></div>
+    <div class="card legacy"><h3 class="amber">.NET 9</h3><p>Implementation removed. Always throws <b>PlatformNotSupportedException</b></p></div>
+  </div>
+  <p class="muted" style="margin-top:40px">An unsupported compatibility package brings it back. <span class="amber">Ban that too.</span></p>
+</section>
+
+<section id="data-contracts" data-part="3" data-cue="Open legacy/FeeBilling.Ingestion.Wcf/DataContracts.cs">
+  <h2>Coupled to a type name</h2>
+  <div class="file">legacy/FeeBilling.Ingestion.Wcf/DataContracts.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="3,4">/// &lt;summary&gt;
+/// One parsed line of a custodian position file. Staged as a BinaryFormatter-serialized
+/// List&amp;lt;Position&amp;gt; in StagedBatches.Payload - the assembly-qualified type name
+/// (FeeBilling.Ingestion.Wcf.Position, FeeBilling.Ingestion.Wcf) is baked into every row.
+/// &lt;/summary&gt;
+[Serializable]
+public class Position</pre>
+  <p class="muted">The migration is about to change that assembly name and namespace.</p>
+</section>
+
+<section id="stop-writes" data-part="3" data-cue="How do you migrate the existing rows?">
+  <h2>Migrating: first, stop new writes</h2>
+  <p>Stage the <span class="accent">raw file</span>, not your parse of it.</p>
+  <p class="muted">The CoreWCF host from lesson 17 writes the original bytes to Blob Storage. Nothing to deserialize.</p>
+</section>
+
+<section id="convert-rows" data-part="3" data-cue="For the rows already in the table, there are two options.">
+  <h2>Rows already staged · option 1</h2>
+  <div class="card legacy">
+    <h3 class="amber">A one-time .NET Framework 4.7.2 tool</h3>
+    <ul>
+      <li>Framework can still run BinaryFormatter</li>
+      <li>Deserialize each row with a <b>serialization binder</b> that allows exactly two types: the list and <b>Position</b></li>
+      <li>Reject everything else; re-serialize to JSON</li>
+    </ul>
+  </div>
+</section>
+
+<section id="nrbf-decoder" data-part="3" data-cue="The second option is newer.">
+  <h2>Rows already staged · option 2</h2>
+  <div class="card modern">
+    <h3>System.Formats.Nrbf (introduced with .NET 9)</h3>
+    <ul>
+      <li><b>NrbfDecoder</b> reads the stream as a tree of class and array records with named fields</li>
+      <li>Never loads or instantiates the types they name: safe on .NET 10</li>
+      <li>Verify the record shapes against a real payload first</li>
+    </ul>
+  </div>
+  <p class="muted" style="margin-top:32px">Either way: a format marker on each row, so old and new coexist during the switch.</p>
+</section>
+
+<!-- ───────────── Encoding.Default ───────────── -->
+<section id="default" data-part="4" data-cue="The second silent breaker is one word: Default.">
+  <div class="kicker">Silent breaker 2</div>
+  <h1><span class="amber">Encoding.Default</span></h1>
+</section>
+
+<section id="default-meaning" data-part="4" data-cue="On .NET Framework, Encoding.Default returns the machine's ANSI code page.">
+  <h2>Same property, different answer</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">.NET Framework</h3><p>The machine's <b>ANSI code page</b>. Typically Windows-1252 on a Western server, but machine-dependent.</p></div>
+    <div class="card modern"><h3>.NET Core and modern .NET</h3><p>Always <b>UTF-8</b>.</p></div>
+  </div>
+</section>
+
+<section id="seed-bytes" data-part="4" data-cue="Now look at the seed file.">
+  <h2>The French seed file, byte by byte</h2>
+  <p class="muted small">Windows-1252, because the feed agent runs on French Windows (seed/README.md)</p>
+  <table>
+    <tr><th>Character</th><th>Where</th><th>Windows-1252 byte</th></tr>
+    <tr><td>ô</td><td>C<b>ô</b>té</td><td class="accent">0xF4</td></tr>
+    <tr><td>é</td><td>Côt<b>é</b></td><td class="accent">0xE9</td></tr>
+    <tr><td>non-breaking space</td><td>group separator in 609 471,47</td><td class="accent">0xA0</td></tr>
+  </table>
+  <pre class="code" data-lang="md" style="margin-top:32px">LFG000002003Côté, Jean - REER                   609 471,472026-09-30</pre>
+</section>
+
+<section id="utf8-decode" data-part="4" data-cue="Decode those bytes as UTF-8 on .NET 10">
+  <h2>Decoded as UTF-8 on .NET 10</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">The name</h3><p>Côté → <span class="red">C�t�</span></p><p class="small muted">0xF4 and 0xE9 aren't valid alone in UTF-8</p></div>
+    <div class="card legacy"><h3 class="amber">The amount</h3><p>609 471,47 → <span class="red">609�471,47</span></p><p class="small muted">Won't parse in any culture</p></div>
+  </div>
+  <p style="margin-top:36px">The encoding bug has turned into a <span class="amber">number bug</span>.</p>
+</section>
+
+<section id="encoding-fix" data-part="4" data-cue="The fix is to never use the default.">
+  <h2>Never use the default</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="cs" data-mark="1,2">Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);   // once, at startup
+var encoding = Encoding.GetEncoding(1252);                        // from the source's configuration
+var text = encoding.GetString(content);</pre>
+  <ul>
+    <li class="small">The code-page provider ships with modern .NET; .NET Standard needs <b>System.Text.Encoding.CodePages</b></li>
+    <li class="small">The encoding is part of the file format: configure it per custodian source</li>
+  </ul>
+</section>
+
+<!-- ───────────── Culture ───────────── -->
+<section id="culture" data-part="5" data-cue="The third silent breaker is culture.">
+  <div class="kicker">Silent breaker 3</div>
+  <h2>Culture</h2>
+  <p><span class="accent">decimal.Parse</span> and <span class="accent">DateTime.Parse</span> without a format provider use the thread's <b>current culture</b>.</p>
+</section>
+
+<section id="combinations" data-part="5" data-cue="Think through the combinations.">
+  <h2>Same files, different servers</h2>
+  <table>
+    <tr><th>Runtime and culture</th><th>Invariant file (1052590.68)</th><th>French file (1 052 590,68)</th></tr>
+    <tr><td>Framework · en-CA</td><td class="green">Parses</td><td class="red">Fails: NBSP isn't a group separator</td></tr>
+    <tr><td>Framework · fr-CA</td><td class="red">Fails: period isn't the decimal separator</td><td class="green">Parses</td></tr>
+    <tr><td>.NET 10 · any</td><td class="muted">Depends on culture</td><td class="red">Fails everywhere: encoding destroyed it</td></tr>
+  </table>
+</section>
+
+<section id="fb-274" data-part="5" data-cue="Open legacy/FeeBilling.Tests/Ingestion/CustodianFeedServiceTests.cs">
+  <h2>FB-274: a real ticket</h2>
+  <div class="file">legacy/FeeBilling.Tests/Ingestion/CustodianFeedServiceTests.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,6,10">// FB-274: the Montreal data centre servers run fr-CA.
+[TestMethod]
+public void SubmitPositionFile_OnFrenchCanadianServer_ParsesAmounts()
+{
+    // …
+        Thread.CurrentThread.CurrentCulture = new CultureInfo("fr-CA");
+        var service = new CustodianFeedService();
+
+        var receipt = service.SubmitPositionFile("NBIN", "NBIN_20160930_POS.txt", File(
+            Line("LFG000002001", "Tremblay, Marie - REER", "1234567.89", "2016-09-30"),</pre>
+  <p class="muted small">One of the nine failing tests in the legacy suite.</p>
+</section>
+
+<section id="culture-auto" data-part="5" data-cue="It gets worse in the web app.">
+  <h2>In the web app, the browser picks</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code" data-lang="xml" data-mark="2">&lt;!-- Thread culture follows the browser's Accept-Language header. --&gt;
+&lt;globalization culture="auto" uiCulture="auto" /&gt;</pre>
+  <p>Culture-sensitive parsing and formatting can behave differently <span class="amber">for each user</span>.</p>
+</section>
+
+<section id="nls-icu" data-part="5" data-cue="Then there's the platform change.">
+  <h2>NLS to ICU</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">.NET Framework on Windows</h3><p>Culture data from the operating system: <b>NLS</b></p></div>
+    <div class="card modern"><h3>.NET 5+ (Windows too)</h3><p>Culture data from <b>ICU</b>, and it varies by ICU version</p></div>
+  </div>
+  <p style="margin-top:36px">On one .NET 10 machine: fr-CA groups with a <span class="accent">non-breaking space</span>; fr-FR with a <span class="amber">narrow non-breaking space</span>.</p>
+</section>
+
+<section id="invariant-mode" data-part="5" data-cue="And in containers, small images often run in invariant globalization mode">
+  <h2>Containers: invariant globalization</h2>
+  <p>Small images often run with no culture-specific data.</p>
+  <p class="muted">Depending on settings, creating fr-CA may even throw. Check your image.</p>
+</section>
+
+<section id="culture-lesson" data-part="5" data-cue="The lesson is: culture data isn't a file format specification.">
+  <div class="kicker">The lesson</div>
+  <p class="quote">Culture data isn't a file format specification. <span class="accent">The file format</span> defines how numbers are written, not the server, and not the browser.</p>
+</section>
+
+<!-- ───────────── Parsing by specification ───────────── -->
+<template id="parser-steps">
+  <h2>A parser that follows the specification</h2>
+  <ol>
+    <li class="item">A fixed-width field spec, not magic numbers</li>
+    <li class="item">Explicit encoding and NumberFormatInfo per source</li>
+    <li class="item">Exact parsing: TryParse, DateOnly.TryParseExact</li>
+    <li class="item">Correct line endings (CRLF, header, no trailing newline)</li>
+    <li class="item">Quarantine bad lines, don't fail the batch</li>
+  </ol>
+</template>
+<section id="parser-0" data-part="6" data-cue="So here's the robust version" data-template="parser-steps"></section>
+<section id="parser-1" data-part="6" data-cue="First, a fixed-width field spec instead of magic numbers." data-template="parser-steps" data-highlight="1"></section>
+
+<section id="layout" data-part="6" data-cue="Put that in a small layout class">
+  <h2>The 2014 layout, as named fields</h2>
+  <table>
+    <tr><th>Field</th><th>Start</th><th>Length</th><th>Notes</th></tr>
+    <tr><td>AccountNumber</td><td>0</td><td>12</td><td></td></tr>
+    <tr><td>AccountName</td><td>12</td><td>28</td><td></td></tr>
+    <tr><td>MarketValue</td><td>40</td><td>18</td><td>Right-aligned</td></tr>
+    <tr><td>AsOfDate</td><td>58</td><td>10</td><td>yyyy-MM-dd</td></tr>
+  </table>
+  <p class="muted" style="margin-top:32px">Line length: <b>68</b></p>
+</section>
+
+<section id="parser-2" data-part="6" data-cue="Second, an explicit encoding and an explicit NumberFormatInfo" data-template="parser-steps" data-highlight="2"></section>
+
+<section id="number-format" data-part="6" data-cue="For the French file, create a number format">
+  <h2>Formats from the file spec</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="4,8,9">var frenchFile = new NumberFormatInfo
+{
+    NumberDecimalSeparator = ",",
+    NumberGroupSeparator = "\u00A0",      // from the file spec, not from ICU's fr-CA data
+};
+var invariantFile = NumberFormatInfo.InvariantInfo;
+
+decimal.TryParse(value, NumberStyles.Number, frenchFile, out var marketValue);
+DateOnly.TryParseExact(asOf, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+    DateTimeStyles.None, out var asOfDate);</pre>
+</section>
+
+<section id="parser-3" data-part="6" data-cue="Third, exact parsing." data-template="parser-steps" data-highlight="3"></section>
+<section id="parser-4" data-part="6" data-cue="Fourth, handle line endings." data-template="parser-steps" data-highlight="4"></section>
+<section id="parser-5" data-part="6" data-cue="And fifth, quarantine instead of failing the batch." data-template="parser-steps" data-highlight="5"></section>
+
+<section id="feed-file-name" data-part="6" data-cue="Legacy has one piece that does this right">
+  <h2>A contrast: FeedFileName</h2>
+  <div class="file">legacy/FeeBilling.Ingestion.Wcf/FeedFileName.cs</div>
+  <pre class="code" data-lang="cs" data-mark="6">var parts = name.Split('_');
+// …
+return new FeedFileName
+{
+    CustodianCode = parts[0].ToUpper(),
+    FileDate = DateTime.ParseExact(parts[1], "yyyyMMdd", CultureInfo.InvariantCulture),
+    FileType = parts[2].ToUpper()
+};</pre>
+  <p class="green">Exact format, invariant culture: this line is right.</p>
+</section>
+
+<section id="feed-file-name-flaws" data-part="6" data-cue="But even it isn't perfect.">
+  <h2>…but not perfect</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">ToUpper is culture-sensitive</h3><p>Under tr-TR, lower-case i becomes İ, so <b>nbin</b> becomes <span class="red">NBİN</span>. Use <b>ToUpperInvariant</b>.</p></div>
+    <div class="card legacy"><h3 class="amber">Only three parts kept</h3><p>NBIN_20260930_POS_FR.txt: the <span class="red">FR</span> marker is silently dropped.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── More breakers + tests ───────────── -->
+<section id="more-breakers" data-part="7" data-cue="Round out the list with a few more from this repository.">
+  <h2>More silent breakers</h2>
+  <div class="cols">
+    <ul>
+      <li class="small">FeeCalculator cache key uses <b>ToShortDateString</b></li>
+      <li class="small">CsvExporter formats values with the server's current culture</li>
+      <li class="small">"C" under the invariant culture prints <span class="amber">¤</span>, not $</li>
+    </ul>
+    <ul>
+      <li class="small">JSON casing and serializer behaviour</li>
+      <li class="small">EF Core: no lazy loading, different query translation</li>
+      <li class="small">System.Drawing is Windows-only</li>
+      <li class="small">Distributed transactions: Windows and an opt-in</li>
+    </ul>
+  </div>
+</section>
+
+<section id="acceptance-tests" data-part="7" data-cue="Now, how do you prove the fix?">
+  <h2>Proving the fix</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Culture theory</h3><p>Run under en-CA, fr-CA and tr-TR. The parser gives the same answer in each.</p></div>
+    <div class="card modern"><h3>Both seed files</h3><p>Invariant and French files produce identical positions: 12 lines, including <b>Côté, Jean</b> at <b>$609,471.47</b>.</p></div>
+  </div>
+</section>
+
+<section id="symmetric-fixture" data-part="7" data-cue="And there's a trap in the legacy test">
+  <h2>A symmetric fixture hides the bug</h2>
+  <div class="file">legacy/FeeBilling.Tests/Ingestion/CustodianFeedServiceTests.cs</div>
+  <pre class="code" data-lang="cs" data-mark="3">private static byte[] File(params string[] lines)
+{
+    return Encoding.Default.GetBytes(Header + "\n" + string.Join("\n", lines));
+}</pre>
+  <p>The service decodes with <b>Encoding.Default.GetString</b>. Both ends change together on .NET Core, so the test can't see it.</p>
+  <p class="accent">Use the real, byte-exact files as fixtures.</p>
+</section>
+
+<section id="guardrail" data-part="7" data-cue="Finally, a guardrail.">
+  <h2>A guardrail in CI</h2>
+  <div class="file">Sketch · CI step</div>
+  <pre class="code" data-lang="sh"># Fail the build if BinaryFormatter appears anywhere in src/
+! git grep -n "BinaryFormatter" -- src</pre>
+  <p class="muted">Include the compatibility package. Lesson 24 turns this into an analyzer.</p>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="8" data-cue="A few traps to call out.">
+  <h2>Traps</h2>
+  <ul>
+    <li class="small">Symmetric fixtures that hide encoding bugs</li>
+    <li class="small">"The column is ours, so BinaryFormatter is safe", or reviving it with the compatibility package</li>
+    <li class="small">Trusting culture data as a file format (fr-CA and fr-FR disagree)</li>
+    <li class="small">Forgetting invariant globalization in containers</li>
+    <li class="small">Missing culture="auto" in Web.config</li>
+    <li class="small">Splitting on line feed in CRLF files</li>
+    <li class="small">Failing a whole batch for one bad line</li>
+  </ul>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="9" data-cue="Let's practise.">
+  <div class="kicker">Interview drill</div>
+  <h1>Four questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="9" data-cue="What breaks silently when moving to modern .NET?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 4</div>
+  <p class="question">What breaks silently when moving to modern .NET?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="9" data-cue="Encoding.Default changes from the machine's ANSI code page to UTF-8">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Encoding.Default: ANSI code page → UTF-8, so Windows-1252 files garble</li>
+    <li>BinaryFormatter removed in .NET 9</li>
+    <li>Globalization: NLS → ICU, culture data changes</li>
+    <li>JSON defaults and casing; EF Core lazy loading and translation</li>
+    <li>System.Drawing Windows-only; distributed transactions need an opt-in</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="9" data-cue="Why is BinaryFormatter dangerous?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 4</div>
+  <p class="question">Why is BinaryFormatter dangerous?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="9" data-cue="The payload names the types to instantiate">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>The payload names the types to instantiate</li>
+    <li>Crafted payloads trigger gadget chains → code execution</li>
+    <li>No safe use on untrusted input; your own database isn't a trust boundary</li>
+    <li>Obsolete since .NET 5, removed in .NET 9</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="9" data-cue="How do you migrate data that was serialized with BinaryFormatter?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 4</div>
+  <p class="question">How do you migrate data that was serialized with BinaryFormatter?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="9" data-cue="First, stop writing it.">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Stop writing it: stage the raw input instead</li>
+    <li>Convert once: net472 tool with a restricted binder → JSON</li>
+    <li>Or <span class="accent">System.Formats.Nrbf</span>: read records without instantiating types</li>
+    <li>Format marker so both coexist; ban BinaryFormatter in CI</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="9" data-cue="How do you parse numbers from files safely?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 4</div>
+  <p class="question">How do you parse numbers from files safely?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="9" data-cue="The file format defines the culture, not the server.">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>The file format defines the culture, not the server</li>
+    <li>Explicit encoding and NumberFormatInfo per source; TryParseExact for dates</li>
+    <li>Fixed-width field spec, not magic offsets</li>
+    <li>Quarantine bad lines with reason codes</li>
+    <li>Test under several cultures with byte-exact fixtures</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">BinaryFormatter is an RCE risk, removed in .NET 9: stage raw bytes, convert safely, ban it.</li>
+    <li class="item">Encoding.Default: ANSI on Framework, UTF-8 on modern .NET. Ask for 1252 explicitly.</li>
+    <li class="item">No format provider = current culture, which the legacy web app lets the browser choose.</li>
+    <li class="item">Parse by specification: layout, explicit formats, exact dates, line endings, quarantine.</li>
+    <li class="item">Prove it with byte-exact fixtures and tests under several cultures.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember from this lesson." data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: BinaryFormatter is a remote code execution risk" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: Encoding.Default is the ANSI code page" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: parsing without a format provider" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: parse by specification" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: prove it with real byte-exact fixtures" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="10" data-cue="In the next lesson, we'll replace Web.config">
+  <div class="kicker">Next</div>
+  <h1>19 · Configuration, Logging and Observability</h1>
+  <p class="lead">Options, structured logging and OpenTelemetry in place of Web.config, transforms and log4net.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

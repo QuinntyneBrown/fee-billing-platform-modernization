@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 12 Slides</title>
+<!--
+  Slides for the lesson 12 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="12" data-lesson-title="Billing API: Idempotency, CQRS and Streaming" data-parts="Introduction|The questions|The double-click|Idempotency-Key flow|The race|The natural key|Slices and errors|Invoices without buffering|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 12</div>
+  <h1>Billing API:<br>Idempotency, CQRS and Streaming</h1>
+  <p class="lead">Two legacy behaviours that look like bugs, and are really design problems.</p>
+</section>
+
+<section id="two-problems" data-part="0" data-cue="First, starting a billing run has no duplicate protection anywhere">
+  <h2>Two design problems</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">A double-click double-bills</h3><p>No duplicate protection anywhere: two clicks queue two runs.</p></div>
+    <div class="card legacy"><h3 class="amber">A whole run in memory</h3><p>Invoice endpoints load every invoice, for firms with 40,000 accounts.</p></div>
+  </div>
+  <p class="muted" style="margin-top:40px">The replacement: idempotent start-run, vertical slices, problem details, constant-memory listing and export.</p>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>How do you make a POST idempotent?</li>
+    <li>Isn't a unique constraint on firm and period enough?</li>
+    <li>Offset or cursor paging?</li>
+    <li>How do you export 50,000 rows without loading them into memory?</li>
+    <li>Do you need MediatR to do CQRS?</li>
+  </ul>
+</section>
+
+<!-- ───────────── The double-click ───────────── -->
+<section id="start-run" data-part="2" data-cue="Start with the legacy code path">
+  <h2>The legacy start-run</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/BillingController.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="5,6">[HttpPost, Route("runs")]
+public IHttpActionResult StartRun(BillingRunRequest req)
+{
+    var user = HttpContext.Current.User.Identity.Name;
+    var runId = BillingRunService.Enqueue(req.FirmId, req.PeriodEnd, user);
+    return Ok(new { runId });   // double-click = two billing runs = double-billed clients
+}</pre>
+</section>
+
+<section id="enqueue-proc" data-part="2" data-cue="Follow it down">
+  <h2>No check in the procedure, or the table</h2>
+  <div class="file">database/billing/002-stored-procedures.sql</div>
+  <pre class="code tight" data-lang="sql" data-mark="1,8,9">-- 5. Enqueue a run. No duplicate check.
+-------------------------------------------------------------------------------
+CREATE PROCEDURE dbo.usp_EnqueueBillingRun
+    @FirmId      int,
+    @PeriodEnd   date,
+    @RequestedBy nvarchar(100)
+AS
+    -- …
+    INSERT INTO dbo.BillingRunQueue (FirmId, PeriodEnd, Status, RequestedBy, RequestedOn)
+    VALUES (@FirmId, @PeriodEnd, 'Pending', @RequestedBy, GETDATE());</pre>
+  <p class="small muted">And the BillingRunQueue table has no unique constraint on firm and period either.</p>
+</section>
+
+<section id="fb-247" data-part="2" data-cue="The front end knows about it">
+  <h2>The front end knows</h2>
+  <div class="file">legacy/FeeBilling.Web/App/billing/billing-review.controller.js</div>
+  <pre class="code" data-lang="js" data-mark="1,2">// FB-247: people double-click this and we get two runs for the same period.
+// Server-side de-dupe is on the backlog.
+api.startRun(vm.firmId, vm.periodEnd).then(function (response) {</pre>
+</section>
+
+<section id="no-layer" data-part="2" data-cue="So there's no protection at any layer">
+  <h2>No protection at any layer</h2>
+  <div class="cols">
+    <ul>
+      <li class="red">UI</li>
+      <li class="red">API</li>
+      <li class="red">Stored procedure</li>
+      <li class="red">Table</li>
+    </ul>
+    <div class="card legacy"><h3 class="amber">Disabling the button doesn't fix</h3><p>Network retries · proxies that retry on a timeout · two people on two machines starting the same run</p></div>
+  </div>
+  <p class="accent" style="margin-top:40px">Idempotency has to be enforced where the data is.</p>
+</section>
+
+<!-- ───────────── Idempotency-Key flow ───────────── -->
+<section id="key-header" data-part="3" data-cue="Here's the standard design">
+  <h2>The client sends a key</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="md" data-mark="2">POST /api/v1/billing/runs
+Idempotency-Key: 3f2c9d1e-5b7a-4c1e-9a0d-8e6f2b1c4d77
+Content-Type: application/json
+
+{ "FirmId": 1, "PeriodEnd": "2026-09-30" }</pre>
+  <p>One unique key per logical operation. <span class="accent">The same key on every retry.</span></p>
+</section>
+
+<section id="key-table" data-part="3" data-cue="The server keeps a table of keys">
+  <h2>The server keeps a table of keys</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="sql" data-mark="8">CREATE TABLE dbo.IdempotencyKeys
+(
+    Scope        varchar(50)     NOT NULL,   -- e.g. 'StartBillingRun'
+    [Key]        varchar(100)    NOT NULL,
+    RequestHash  varbinary(32)   NOT NULL,
+    RunId        int             NULL,       -- the stored result
+    CreatedOn    datetime2       NOT NULL,
+    CONSTRAINT PK_IdempotencyKeys PRIMARY KEY (Scope, [Key])
+);</pre>
+  <p class="small">The primary key is scope plus key: <span class="accent">the database guarantees a key is stored once</span>.</p>
+</section>
+
+<section id="outcomes" data-part="3" data-cue="There are three outcomes">
+  <h2>Three outcomes</h2>
+  <div class="cols3">
+    <div class="card modern"><h3>New key</h3><p>Do the work. Store the key and the result.</p></div>
+    <div class="card"><h3>Same key, same hash</h3><p>Replay the stored result: same run ID, no second run.</p></div>
+    <div class="card legacy"><h3 class="amber">Same key, different hash</h3><p>A key reused for a different request: <b>422</b>.</p></div>
+  </div>
+</section>
+
+<section id="hashing" data-part="3" data-cue="What exactly do you hash?">
+  <h2>What exactly do you hash?</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Not the raw bytes</h3><p>Whitespace or property order differ; a byte hash calls identical requests different.</p></div>
+    <div class="card modern"><h3>A canonical form</h3><p>Firm ID, period end, run type: fixed order, fixed format. A retry from another client library still matches.</p></div>
+  </div>
+</section>
+
+<section id="lifetime" data-part="3" data-cue="Keys don't live forever">
+  <h2>Lifetime and scope</h2>
+  <ul>
+    <li>Keep keys long enough for any realistic retry: a day interactive, longer for batch</li>
+    <li>Clean them up with a scheduled job</li>
+    <li><span class="amber">Scope the lookup by the caller's tenant</span>, so a key only replays a result the same tenant created</li>
+  </ul>
+</section>
+
+<section id="same-tx" data-part="3" data-cue="The key must be stored in the same transaction as the side effect">
+  <h2>One local transaction</h2>
+  <svg width="1640" height="300" viewBox="0 0 1640 300">
+    <rect x="0" y="10" width="1640" height="280" rx="22" fill="none" stroke="#38bdf8" stroke-width="3" stroke-dasharray="12 10"/>
+    <text x="40" y="60" fill="#38bdf8" font-size="28" font-weight="600">BEGIN TRANSACTION … COMMIT</text>
+    <rect x="60" y="110" width="460" height="130" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="290" y="168" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Idempotency key</text>
+    <text x="290" y="208" fill="#8ea2c0" font-size="24" text-anchor="middle">scope, key, hash, result</text>
+    <rect x="590" y="110" width="460" height="130" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="820" y="168" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Billing run</text>
+    <text x="820" y="208" fill="#8ea2c0" font-size="24" text-anchor="middle">Pending</text>
+    <rect x="1120" y="110" width="460" height="130" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="1350" y="168" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Outbox row</text>
+    <text x="1350" y="208" fill="#8ea2c0" font-size="24" text-anchor="middle">starts processing</text>
+  </svg>
+  <div class="cols" style="margin-top:32px">
+    <div class="card legacy"><p class="small"><b class="amber">Key without run:</b> a retry returns a run that doesn't exist.</p></div>
+    <div class="card legacy"><p class="small"><b class="amber">Run without key:</b> a retry creates a second run.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── The race ───────────── -->
+<section id="race-naive" data-part="4" data-cue="The naive handler checks first">
+  <h2>Check-then-insert has a race window</h2>
+  <table>
+    <tr><th>Request A</th><th>Request B</th></tr>
+    <tr><td>SELECT key → none</td><td>SELECT key → none</td></tr>
+    <tr><td>INSERT run</td><td>INSERT run</td></tr>
+    <tr><td colspan="2" style="font-family:inherit;font-size:30px" class="red">Two runs. Double-billed.</td></tr>
+  </table>
+  <p style="margin-top:36px" class="accent">Check-then-insert can never be made safe on its own.</p>
+</section>
+
+<section id="race-constraint" data-part="4" data-cue="The constraint closes it">
+  <h2>The constraint closes it</h2>
+  <table>
+    <tr><th>Request A</th><th>Request B</th></tr>
+    <tr><td>INSERT key → takes it</td><td>INSERT key → blocks on A's row</td></tr>
+    <tr><td>COMMIT</td><td>fails: duplicate key (2627 / 2601)</td></tr>
+    <tr><td></td><td>catch → roll back → read A's result</td></tr>
+    <tr><td colspan="2" style="font-family:inherit;font-size:30px" class="green">Both callers get the same run ID. One run.</td></tr>
+  </table>
+  <div class="file" style="margin-top:32px">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs">catch (DbUpdateException ex) when (ex.InnerException is SqlException { Number: 2627 or 2601 })</pre>
+</section>
+
+<section id="replay" data-part="4" data-cue="What should the replay look like?">
+  <h2>What the replay looks like</h2>
+  <ul>
+    <li>The same status code and body as the original</li>
+    <li>Optionally, a header saying the result was replayed</li>
+    <li>Enqueuing is quick, so blocking the loser is fine</li>
+    <li class="amber">Minutes-long operations: store the key as in-progress, return a conflict to a duplicate that arrives mid-flight</li>
+  </ul>
+</section>
+
+<section id="race-test" data-part="4" data-cue="Prove it with a test">
+  <h2>Prove it with a test</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="4,5">var key = Guid.NewGuid().ToString();
+var responses = await Task.WhenAll(Enumerable.Range(0, 10).Select(_ => StartRunAsync(key, request)));
+
+Assert.Single(responses.Select(r => r.RunId).Distinct());
+Assert.Equal(1, await CountRunsAsync(request.FirmId, request.PeriodEnd));</pre>
+  <ul>
+    <li>WebApplicationFactory + Testcontainers, like AccountsApiFixture</li>
+    <li>Second test: same key, different body → <b>422</b></li>
+    <li class="amber">A real database: the in-memory provider doesn't enforce the constraint</li>
+  </ul>
+</section>
+
+<!-- ───────────── Natural key ───────────── -->
+<section id="natural-necessary" data-part="5" data-cue="It's necessary because the unmodified AngularJS app sends no idempotency header">
+  <h2>A natural key: necessary</h2>
+  <p>The unmodified AngularJS app sends <span class="amber">no idempotency header</span>. Only a business rule can stop its double-click.</p>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="sql">CREATE UNIQUE INDEX UX_BillingRunQueue_Firm_Period_Type ON dbo.BillingRunQueue (FirmId, PeriodEnd, RunType);</pre>
+  <p class="small muted">RunType is a new column: regular, rerun, shadow. A deliberate rerun is still possible.</p>
+</section>
+
+<section id="natural-both" data-part="5" data-cue="It isn't sufficient because it can't give an API client a safe retry">
+  <h2>…but not sufficient</h2>
+  <div class="cols">
+    <div class="card"><h3>Natural key</h3><p>Business uniqueness: one regular run per firm, period end, run type.</p></div>
+    <div class="card modern"><h3>Idempotency key</h3><p>Retry safety: the same response, and "I'm retrying" vs "I really want another run".</p></div>
+  </div>
+  <p class="accent" style="margin-top:36px">You want both.</p>
+</section>
+
+<section id="warnings" data-part="5" data-cue="Two practical warnings">
+  <h2>Two practical warnings</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Existing duplicates</h3><p>The index fails if production already has duplicate runs. Given FB-247, it probably does. Clean first, as its own reviewed step.</p></div>
+    <div class="card legacy"><h3 class="amber">Filtered indexes</h3><p>Inserts need the quoted identifier setting on; a procedure keeps the setting it was created with. Check how legacy procs were deployed.</p></div>
+  </div>
+</section>
+
+<section id="broker" data-part="5" data-cue="And don't rely on the message broker to de-duplicate for you">
+  <h2>Don't rely on the broker</h2>
+  <div class="file">docker/servicebus/Config.json · billing-runs</div>
+  <pre class="code" data-lang="json" data-mark="3">"DuplicateDetectionHistoryTimeWindow": "PT20S",
+// …
+"RequiresDuplicateDetection": false,</pre>
+  <p>Off, and even when on it only covers a time window. <span class="accent">Consumers must be idempotent too</span> (lesson 16).</p>
+</section>
+
+<!-- ───────────── Slices and errors ───────────── -->
+<section id="slices" data-part="6" data-cue="Organize the Billing API by feature, not by layer">
+  <h2>Vertical slices</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="md">Billing/
+  StartBillingRun/       request · handler · endpoint
+  GetBillingRun/
+  ListInvoices/
+  PreviewFee/
+  CreateFeeSchedule/
+  GetFeeSchedule/</pre>
+  <p>Change how a run starts, and everything you need is in one folder.</p>
+</section>
+
+<section id="cqrs" data-part="6" data-cue="Commands change state, queries read it">
+  <h2>CQRS without a library</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs">public interface IHandler&lt;TRequest, TResult&gt;
+{
+    Task&lt;TResult&gt; HandleAsync(TRequest request, CancellationToken cancellationToken);
+}
+
+app.MapPost("/api/v1/billing/runs",
+    (StartBillingRun command, IHandler&lt;StartBillingRun, RunStarted&gt; handler, CancellationToken ct) =>
+        handler.HandleAsync(command, ct));</pre>
+  <p class="small">About 50 lines in all. <span class="amber">MediatR and AutoMapper moved to commercial licences in 2025</span>; check current terms. Every dependency needs a licence review.</p>
+</section>
+
+<section id="validation" data-part="6" data-cue="For validation, use FluentValidation or hand-rolled validators">
+  <h2>Errors: decide per route</h2>
+  <div class="cols">
+    <div class="card modern"><h3>/api/v1/billing</h3><p>RFC 9457 problem details.</p></div>
+    <div class="card legacy"><h3 class="amber">/api/billing (legacy)</h3><p>Keep the legacy shape. The screen reads Message:</p></div>
+  </div>
+  <div class="file" style="margin-top:32px">legacy/FeeBilling.Web/App/billing/billing-review.controller.js</div>
+  <pre class="code tight" data-lang="js">vm.error = (response.data &amp;&amp; response.data.Message) || 'Could not start the billing run.';</pre>
+</section>
+
+<section id="versioning" data-part="6" data-cue="That's the versioning story in one sentence">
+  <h2>Versioning in one sentence</h2>
+  <svg width="1640" height="330" viewBox="0 0 1640 330">
+    <defs><marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="20" width="520" height="110" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="260" y="70" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">/api/v1/billing</text>
+    <text x="260" y="108" fill="#8ea2c0" font-size="24" text-anchor="middle">new shapes, problem details</text>
+    <rect x="0" y="200" width="520" height="110" rx="18" fill="#221b0d" stroke="#f5b544" stroke-width="3"/>
+    <text x="260" y="250" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">/api/billing</text>
+    <text x="260" y="288" fill="#8ea2c0" font-size="24" text-anchor="middle">legacy shapes, for AngularJS</text>
+    <line x1="525" y1="255" x2="700" y2="255" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="710" y="200" width="440" height="110" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="930" y="250" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">YARP path transform</text>
+    <text x="930" y="288" fill="#8ea2c0" font-size="24" text-anchor="middle">lesson 9</text>
+    <line x1="1155" y1="255" x2="1300" y2="255" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow)"/>
+    <line x1="525" y1="75" x2="1300" y2="75" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="1310" y="20" width="330" height="290" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="1475" y="160" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Billing.Api</text>
+    <text x="1475" y="198" fill="#8ea2c0" font-size="24" text-anchor="middle">.NET 10</text>
+  </svg>
+  <p style="margin-top:28px">Anything that changes a response shape goes into <span class="accent">v1 only</span>. The legacy path lives until the AngularJS screens are gone.</p>
+</section>
+
+<section id="preview" data-part="6" data-cue="The last slice is the preview">
+  <h2>PreviewFee: a what-if slice</h2>
+  <ul>
+    <li>Runs the pure fee engine, <b>no persistence</b></li>
+    <li>No state change: naturally idempotent, safe to retry</li>
+    <li>A POST: the body carries a hypothetical schedule and balances</li>
+    <li class="accent">Shows a product owner a schedule change's effect before anyone saves it</li>
+  </ul>
+</section>
+
+<!-- ───────────── Invoices without buffering ───────────── -->
+<section id="invoice-repo" data-part="7" data-cue="Now the second problem">
+  <h2>The whole run, in a DataSet</h2>
+  <div class="file">legacy/FeeBilling.Data/InvoiceRepository.cs</div>
+  <pre class="code" data-lang="cs" data-mark="4">var ds = new DataSet();
+using (var adapter = new SqlDataAdapter(command))
+{
+    adapter.Fill(ds);   // whole run in memory; 40k rows for the big firms
+}</pre>
+</section>
+
+<section id="invoices-controller" data-part="7" data-cue="Then open legacy/FeeBilling.Web/Controllers/Api/InvoicesController.cs">
+  <h2>…and 40,000 extra queries</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/InvoicesController.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="3,9">var invoices = db.Invoices
+    .Where(i => i.RunId == runId)
+    .ToList()                               // no paging; 40k rows for the large firms
+    .Select(i => new
+    {
+        i.Id,
+        i.RunId,
+        i.AccountId,
+        i.Account.AccountNumber,            // lazy load per invoice
+        i.Account.AccountName,</pre>
+</section>
+
+<section id="keyset-why" data-part="7" data-cue="For listing, use keyset paging, also called cursor paging">
+  <h2>Offset vs keyset paging</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Offset (skip/take)</h3><p>Skipped rows are still read: page 80 costs 80 pages of reads. Inserts between requests skip or repeat rows.</p></div>
+    <div class="card modern"><h3>Keyset (cursor)</h3><p>Rows after the last one you saw: an index seek every time, stable under inserts.</p></div>
+  </div>
+</section>
+
+<section id="keyset-query" data-part="7" data-cue="Keyset paging asks for rows after the last one you saw">
+  <h2>Rows after the last one you saw</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="2,3">var page = await db.Invoices
+    .Where(i => i.RunId == runId &amp;&amp; i.Id > cursor)
+    .OrderBy(i => i.Id)
+    .Take(pageSize)
+    .Select(i => new InvoiceRow(i.Id, i.AccountId, i.Amount, i.Status))
+    .ToListAsync(cancellationToken);</pre>
+  <div class="file">database/billing/001-schema.sql</div>
+  <pre class="code tight" data-lang="sql">CREATE NONCLUSTERED INDEX IX_Invoices_RunId ON dbo.Invoices (RunId);</pre>
+  <p class="small muted">A non-unique non-clustered index carries the clustered key (Id), so (RunId, Id) is seekable.</p>
+</section>
+
+<section id="cursor" data-part="7" data-cue="Make the cursor opaque">
+  <h2>Cursor rules</h2>
+  <ul class="checks">
+    <li>An opaque next-page token (really the last ID, encoded)</li>
+    <li>Clients pass it back without interpreting it: the sort key can change later</li>
+    <li>The server caps page size, whatever the client asks</li>
+    <li>50,000 rows on screen: keyset paging + virtual scrolling (lesson 22)</li>
+  </ul>
+</section>
+
+<section id="stream" data-part="7" data-cue="For the CSV export, stream">
+  <h2>Stream the CSV</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,2">await using var writer = new StreamWriter(response.Body);
+await foreach (var row in query.AsAsyncEnumerable().WithCancellation(cancellationToken))
+{
+    await writer.WriteLineAsync(InvoiceCsv.Format(row));
+}</pre>
+  <ul>
+    <li>Project to a narrow row type; memory stays flat, 400 or 40,000 invoices</li>
+    <li class="amber">Synchronous response I/O is disallowed by default: dispose the writer asynchronously</li>
+  </ul>
+</section>
+
+<section id="culture" data-part="7" data-cue="And fix the formatting while you're there">
+  <h2>CSV format follows the browser</h2>
+  <div class="file">legacy/FeeBilling.Web/Helpers/CsvExporter.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">var s = value.ToString();   // uses the server's current culture</pre>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code tight" data-lang="xml" data-mark="2">&lt;!-- Thread culture follows the browser's Accept-Language header. --&gt;
+&lt;globalization culture="auto" uiCulture="auto" /&gt;</pre>
+  <p>fr-CA browser: <span class="amber">5312,50</span> instead of 5312.50. <span class="accent">Use the invariant culture and document the format.</span></p>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<template id="traps">
+  <h2>Traps</h2>
+  <ul>
+    <li class="item">Check-then-insert</li>
+    <li class="item">Storing the key outside the transaction</li>
+    <li class="item">Filtered unique indexes and old stored procedures</li>
+    <li class="item">Requiring the header on legacy routes</li>
+    <li class="item">Relying on the broker to de-duplicate</li>
+    <li class="item">Offset paging on a 40,000-row run</li>
+    <li class="item">Buffering "just this once"</li>
+    <li class="item">Culture-dependent CSV output</li>
+    <li class="item">Adding a library to get CQRS</li>
+  </ul>
+</template>
+<section id="traps-1" data-part="8" data-cue="The traps to call out" data-template="traps" data-show="1"></section>
+<section id="traps-2" data-part="8" data-cue="Storing the key outside the transaction" data-template="traps" data-show="2"></section>
+<section id="traps-3" data-part="8" data-cue="Filtered unique indexes and old stored procedures" data-template="traps" data-show="3"></section>
+<section id="traps-4" data-part="8" data-cue="Requiring the header on legacy routes" data-template="traps" data-show="4"></section>
+<section id="traps-5" data-part="8" data-cue="Relying on the message broker to de-duplicate." data-template="traps" data-show="5"></section>
+<section id="traps-6" data-part="8" data-cue="Offset paging on a forty-thousand-row run" data-template="traps" data-show="6"></section>
+<section id="traps-7" data-part="8" data-cue="Buffering" data-template="traps" data-show="7"></section>
+<section id="traps-8" data-part="8" data-cue="Culture-dependent CSV output" data-template="traps" data-show="8"></section>
+<section id="traps-9" data-part="8" data-cue="And adding a library to get CQRS" data-template="traps" data-show="9"></section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="9" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="9" data-cue="How do you make a POST idempotent?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">How do you make a POST idempotent?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="9" data-cue="The client sends an idempotency key header">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Client sends an idempotency key header</li>
+    <li>Server stores key, request hash and result in the side effect's transaction, with a unique constraint</li>
+    <li>Same key + body → replay; same key, different body → 422</li>
+    <li>Concurrent duplicates: the loser catches the duplicate-key error and returns the winner's result</li>
+    <li>Proven with concurrent requests against a real database</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="9" data-cue="Isn't a unique constraint on firm and period enough?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">Isn't a unique constraint on firm and period enough?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="9" data-cue="It stops the double-click, and it's what protects the legacy AngularJS screen">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>It stops the double-click, and protects the AngularJS screen that sends no key</li>
+    <li>It can't give an API client a safe retry with the same response</li>
+    <li>It can't tell a retry from a deliberate rerun</li>
+    <li>Both: natural key (firm, period end, run type) + idempotency key</li>
+    <li>Clean existing duplicates before adding the index</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="9" data-cue="Offset or cursor paging?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">Offset or cursor paging?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="9" data-cue="Cursor, or keyset, for anything large or changing">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Cursor (keyset) for anything large or changing</li>
+    <li>Offset slows as the offset grows; skips or repeats rows when data changes</li>
+    <li>Keyset: rows after the last ID seen, an index seek, stable under inserts</li>
+    <li>Offset is fine for small, static lists</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="9" data-cue="How do you export fifty thousand rows without loading them into memory?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">How do you export 50,000 rows without loading them into memory?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="9" data-cue="Project to a narrow row type, enumerate with AsAsyncEnumerable">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Project to a narrow row type; enumerate with AsAsyncEnumerable</li>
+    <li>Write each row to the response stream as it arrives, async throughout</li>
+    <li>Dispose the writer asynchronously; format with the invariant culture</li>
+    <li>Legacy built a whole DataSet, formatted by the downloader's browser culture</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="9" data-cue="Do you need MediatR for CQRS?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">Do you need MediatR for CQRS?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="9" data-cue="No. CQRS is separating commands from queries">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>No: CQRS is separating commands from queries</li>
+    <li>A handler interface, one handler per use case: about 50 lines</li>
+    <li>Minimal API endpoints inject handlers directly</li>
+    <li>MediatR went commercial in 2025; every dependency needs a licence review</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">No duplicate protection at any layer; disabling the button doesn't fix retries.</li>
+    <li class="item">Key + request hash + result, in the side effect's transaction: new, replay, mismatch.</li>
+    <li class="item">Only a unique constraint closes the race; plus a natural key for the legacy screen.</li>
+    <li class="item">Keyset paging and streamed CSV keep memory flat; invariant culture.</li>
+    <li class="item">Vertical slices and a hand-rolled handler: CQRS without a licensed library.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember from this lesson" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: FeeBilling has no duplicate protection at any layer" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: an idempotency key is stored with a request hash" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: only a unique constraint closes the concurrent race" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: keyset paging and streamed CSV export" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: vertical slices and a hand-rolled handler" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="10" data-cue="In the next lesson, we'll go from API design down to data access">
+  <div class="kicker">Next</div>
+  <h1>13 · EF6 to EF Core</h1>
+  <p class="lead">What changes between Entity Framework 6 and EF Core, and which changes bite during a migration.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

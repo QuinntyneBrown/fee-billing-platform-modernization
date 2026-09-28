@@ -9,101 +9,9 @@
   tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
   Open this file in a browser and use the arrow keys to step through the deck.
 -->
-<style>
-  :root {
-    --bg: #0b1220;
-    --panel: #121b2f;
-    --line: #22304d;
-    --ink: #e8eef8;
-    --muted: #8ea2c0;
-    --accent: #38bdf8;
-    --accent-soft: rgba(56, 189, 248, 0.14);
-    --amber: #f5b544;
-    --amber-soft: rgba(245, 181, 68, 0.14);
-    --green: #4ade80;
-    --red: #f87171;
-    --code-bg: #0a1020;
-  }
-  html, body { margin: 0; background: var(--bg); }
-  body {
-    width: 1920px; height: 1080px; overflow: hidden; transform-origin: 0 0;
-    font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-    color: var(--ink); -webkit-font-smoothing: antialiased;
-  }
-  section {
-    display: none; position: absolute; inset: 0; box-sizing: border-box;
-    padding: 130px 140px 120px; flex-direction: column; justify-content: center;
-  }
-  section.active { display: flex; }
-  .chrome { position: absolute; top: 48px; left: 140px; right: 140px; display: flex; justify-content: space-between; font-size: 26px; color: var(--muted); letter-spacing: 0.02em; }
-  .chrome b { color: var(--accent); font-weight: 600; }
-  .progress { position: absolute; left: 140px; right: 140px; bottom: 56px; display: flex; gap: 8px; }
-  .progress i { flex: 1; height: 6px; border-radius: 3px; background: var(--line); }
-  .progress i.done { background: #2b5f82; }
-  .progress i.now { background: var(--accent); }
-  h1 { font-size: 88px; line-height: 1.08; margin: 0 0 28px; font-weight: 700; letter-spacing: -0.01em; }
-  h2 { font-size: 62px; line-height: 1.12; margin: 0 0 44px; font-weight: 650; }
-  h3 { font-size: 34px; margin: 0 0 16px; color: var(--accent); font-weight: 600; }
-  p { font-size: 40px; line-height: 1.4; margin: 0 0 24px; }
-  .lead { font-size: 44px; color: var(--muted); }
-  ul, ol { margin: 0; padding-left: 1.1em; }
-  li { font-size: 40px; line-height: 1.38; margin: 0 0 18px; }
-  li::marker { color: var(--accent); }
-  .muted { color: var(--muted); }
-  .accent { color: var(--accent); }
-  .amber { color: var(--amber); }
-  .small { font-size: 30px; }
-  .kicker { font-size: 30px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--accent); margin-bottom: 24px; font-weight: 600; }
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 36px 40px; }
-  .card.modern { border-color: #1f5f7f; }
-  .card.legacy { border-color: #6b5220; }
-  .card p, .card li { font-size: 34px; }
-  .quote { font-size: 54px; line-height: 1.35; border-left: 8px solid var(--accent); padding-left: 48px; margin: 0; }
-  .file { font-family: "Cascadia Mono", "Cascadia Code", Consolas, monospace; font-size: 26px; color: var(--muted); margin: 0 0 12px; }
-  pre.code {
-    font-family: "Cascadia Mono", "Cascadia Code", Consolas, monospace; font-size: 27px; line-height: 1.5;
-    background: var(--code-bg); border: 1px solid var(--line); border-radius: 16px; padding: 28px 36px; margin: 0 0 32px;
-    white-space: pre; overflow: hidden; color: #d7e1f0;
-  }
-  pre.code.tight { font-size: 24px; }
-  .code .c { color: #7f96b4; font-style: italic; }
-  .code .s { color: #f2c27b; }
-  .code .k { color: #7cc4ff; }
-  .code .n { color: #c3a6ff; }
-  .code .mark { display: inline-block; width: calc(100% + 72px); margin: 0 -36px; padding: 0 36px; background: rgba(245, 181, 68, 0.13); box-shadow: inset 5px 0 0 var(--amber); }
-  table { border-collapse: collapse; width: 100%; font-size: 27px; }
-  th { text-align: left; color: var(--muted); font-weight: 600; padding: 14px 18px; border-bottom: 2px solid var(--line); }
-  td { padding: 16px 18px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.3; }
-  td:first-child { font-family: "Cascadia Mono", Consolas, monospace; font-size: 25px; white-space: nowrap; }
-  .risk { display: inline-block; padding: 4px 16px; border-radius: 999px; font-weight: 600; font-size: 24px; }
-  .risk.high { background: rgba(248, 113, 113, 0.18); color: var(--red); }
-  .risk.med { background: var(--amber-soft); color: var(--amber); }
-  .risk.low { background: rgba(74, 222, 128, 0.14); color: var(--green); }
-  .grid7 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; }
-  .grid7 .card { padding: 26px 28px; }
-  .grid7 .card h3 { font-family: "Cascadia Mono", Consolas, monospace; font-size: 26px; }
-  .grid7 .card p { font-size: 27px; line-height: 1.35; margin: 0; }
-  .steps { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 48px; }
-  .step { display: flex; align-items: center; gap: 22px; font-size: 32px; padding: 16px 22px; border-radius: 14px; border: 1px solid transparent; }
-  .step .num { width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center; background: var(--panel); border: 1px solid var(--line); font-weight: 700; font-size: 26px; flex: none; }
-  .step .tag { margin-left: auto; font-size: 22px; padding: 4px 14px; border-radius: 999px; background: var(--panel); color: var(--muted); white-space: nowrap; }
-  .step.done .tag { color: var(--green); }
-  .step.next .tag { color: var(--amber); background: var(--amber-soft); }
-  .step.on { background: var(--accent-soft); border-color: var(--accent); }
-  .step.on .num { background: var(--accent); color: #04121f; border-color: var(--accent); }
-  .step.dim { opacity: 0.38; }
-  .question { font-size: 76px; line-height: 1.2; font-weight: 650; margin: 0 0 48px; }
-  .hint { font-size: 32px; color: var(--amber); }
-  .checks li { list-style: none; position: relative; padding-left: 64px; }
-  .checks li::before { content: ""; position: absolute; left: 0; top: 10px; width: 34px; height: 34px; border-radius: 8px; border: 3px solid var(--accent); }
-  .recap li { font-size: 38px; }
-  .recap li.off { opacity: 0.22; }
-  .timeline { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
-  svg text { font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif; }
-</style>
+<link rel="stylesheet" href="../assets/slides.css">
 </head>
-<body>
+<body data-lesson-number="01" data-lesson-title="Migration Strategy: Strangler Fig vs Big Bang" data-parts="Introduction|The questions|Big bang vs strangler fig|FeeBilling today|The strangler in this repo|Sequencing|Definition of done|Inherited decisions|Traps|Interview drill|Recap">
 
 <!-- ───────────── Intro ───────────── -->
 <section id="title" data-part="0">
@@ -416,12 +324,27 @@ public class AccountsController : ApiController</pre>
 </section>
 
 <!-- ───────────── Sequencing ───────────── -->
-<section id="seq-0" data-part="5" data-cue="Order matters more than technology" data-sequence="0"></section>
-<section id="seq-1" data-part="5" data-cue="First, extract shared types" data-sequence="1"></section>
-<section id="seq-2" data-part="5" data-cue="Second, put the gateway in front" data-sequence="2"></section>
-<section id="seq-3" data-part="5" data-cue="Third, migrate something low-risk" data-sequence="3"></section>
-<section id="seq-4" data-part="5" data-cue="Fourth, and this is the step the previous team skipped" data-sequence="4"></section>
-<section id="seq-5" data-part="5" data-cue="Only then do you port the fee engine" data-sequence="5-10"></section>
+<template id="sequence">
+  <h2>Sequencing FeeBilling</h2>
+  <div class="steps">
+    <div class="step item done"><span class="num">1</span>Extract shared types (netstandard2.0)<span class="tag">Done ✓</span></div>
+    <div class="step item done"><span class="num">2</span>Gateway in front of everything<span class="tag">Done ✓</span></div>
+    <div class="step item done"><span class="num">3</span>Accounts + Households (read-mostly)<span class="tag">Done ✓</span></div>
+    <div class="step item next"><span class="num">4</span>Golden master · WP-01<span class="tag">Next</span></div>
+    <div class="step item "><span class="num">5</span>Pure fee engine · WP-02<span class="tag">WP-02</span></div>
+    <div class="step item "><span class="num">6</span>Billing API · WP-03<span class="tag">WP-03</span></div>
+    <div class="step item "><span class="num">7</span>Billing worker · WP-04<span class="tag">WP-04</span></div>
+    <div class="step item "><span class="num">8</span>Custodian ingestion · WP-05<span class="tag">WP-05</span></div>
+    <div class="step item "><span class="num">9</span>Data, config, auth, UI · WP-06 to 09<span class="tag">WP-06–09</span></div>
+    <div class="step item "><span class="num">10</span>Cutover + decommission · WP-10<span class="tag">WP-10</span></div>
+  </div>
+</template>
+<section id="seq-0" data-part="5" data-cue="Order matters more than technology" data-template="sequence"></section>
+<section id="seq-1" data-part="5" data-cue="First, extract shared types" data-template="sequence" data-highlight="1"></section>
+<section id="seq-2" data-part="5" data-cue="Second, put the gateway in front" data-template="sequence" data-highlight="2"></section>
+<section id="seq-3" data-part="5" data-cue="Third, migrate something low-risk" data-template="sequence" data-highlight="3"></section>
+<section id="seq-4" data-part="5" data-cue="Fourth, and this is the step the previous team skipped" data-template="sequence" data-highlight="4"></section>
+<section id="seq-5" data-part="5" data-cue="Only then do you port the fee engine" data-template="sequence" data-highlight="5-10"></section>
 
 <section id="one-rule" data-part="5" data-cue="There's one rule that runs through the whole sequence">
   <div class="kicker">The rule</div>
@@ -597,12 +520,22 @@ public class AccountsController : ApiController</pre>
 </section>
 
 <!-- ───────────── Recap ───────────── -->
-<section id="recap-0" data-part="10" data-cue="Five things to remember" data-recap="0"></section>
-<section id="recap-1" data-part="10" data-cue="One: the strategy answer" data-recap="1"></section>
-<section id="recap-2" data-part="10" data-cue="Two: big bang fails" data-recap="2"></section>
-<section id="recap-3" data-part="10" data-cue="Three: in FeeBilling" data-recap="3"></section>
-<section id="recap-4" data-part="10" data-cue="Four: never ship" data-recap="4"></section>
-<section id="recap-5" data-part="10" data-cue="Five: reads roll back" data-recap="5"></section>
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">The strategy answer is a <b>sequence</b>, not a technology list.</li>
+    <li class="item">Big bang fails three ways: late value, all the risk at once, all-or-nothing rollback.</li>
+    <li class="item">The gateway's fallback route (Order 1000) is the strangler in miniature.</li>
+    <li class="item">Never ship a migration change and a behaviour change together.</li>
+    <li class="item">Reads roll back for free; writes don't. Expand and contract.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: the strategy answer" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: big bang fails" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: in FeeBilling" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: never ship" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: reads roll back" data-template="recap" data-show="5"></section>
 
 <section id="next" data-part="10" data-cue="In the next lesson">
   <div class="kicker">Next</div>
@@ -610,106 +543,6 @@ public class AccountsController : ApiController</pre>
   <p class="lead">Why .NET 10, and how a netstandard2.0 library lets old and new code share types.</p>
 </section>
 
-<div class="chrome"><span><b>01</b> · Migration Strategy: Strangler Fig vs Big Bang</span><span id="part-name"></span></div>
-<div class="progress" id="progress"></div>
-
-<script>
-  const parts = ["Introduction", "The questions", "Big bang vs strangler fig", "FeeBilling today", "The strangler in this repo",
-    "Sequencing", "Definition of done", "Inherited decisions", "Traps", "Interview drill", "Recap"];
-
-  const sequence = [
-    ["Extract shared types (netstandard2.0)", "Done"],
-    ["Gateway in front of everything", "Done"],
-    ["Accounts + Households (read-mostly)", "Done"],
-    ["Golden master · WP-01", "Next"],
-    ["Pure fee engine · WP-02", "WP-02"],
-    ["Billing API · WP-03", "WP-03"],
-    ["Billing worker · WP-04", "WP-04"],
-    ["Custodian ingestion · WP-05", "WP-05"],
-    ["Data, config, auth, UI · WP-06 to 09", "WP-06–09"],
-    ["Cutover + decommission · WP-10", "WP-10"],
-  ];
-
-  const recap = [
-    "The strategy answer is a <b>sequence</b>, not a technology list.",
-    "Big bang fails three ways: late value, all the risk at once, all-or-nothing rollback.",
-    "The gateway's fallback route (Order 1000) is the strangler in miniature.",
-    "Never ship a migration change and a behaviour change together.",
-    "Reads roll back for free; writes don't. Expand and contract.",
-  ];
-
-  function renderSequence(section) {
-    const [from, to] = section.dataset.sequence.split("-").map(Number);
-    const last = to ?? from;
-    const items = sequence.map(([label, tag], i) => {
-      const n = i + 1;
-      const state = from === 0 ? "" : (n >= from && n <= last ? "on" : "dim");
-      const status = tag === "Done" ? "done" : tag === "Next" ? "next" : "";
-      return `<div class="step ${state} ${status}"><span class="num">${n}</span>${label}<span class="tag">${tag === "Done" ? "Done ✓" : tag}</span></div>`;
-    });
-    section.innerHTML = `<h2>Sequencing FeeBilling</h2><div class="steps">${items.join("")}</div>`;
-  }
-
-  function renderRecap(section) {
-    const shown = Number(section.dataset.recap);
-    const items = recap.map((text, i) => `<li class="${i < shown ? "" : "off"}">${text}</li>`);
-    section.innerHTML = `<h2>Five things to remember</h2><ol class="recap">${items.join("")}</ol>`;
-  }
-
-  function highlight(code, lang) {
-    const escape = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const keywords = {
-      cs: "var|new|using|public|class|static|return|if|foreach|in|double|decimal|string|int|true|false|null|await|async",
-      json: "true|false|null",
-      yaml: "true|false",
-      sql: "NOT|NULL|decimal|int|varchar|nvarchar",
-    }[lang];
-    const comment = { yaml: "#.*$", sh: "#.*$", sql: "--.*$", md: "(?!x)x", xml: "(?!x)x" }[lang] ?? "\\/\\/.*$";
-    const pattern = new RegExp(`(${comment})|("(?:[^"\\\\]|\\\\.)*")|\\b(${keywords ?? "(?!x)x"})\\b|(\\b\\d[\\d_,.]*\\b)`, "gm");
-    let html = "", last = 0;
-    code.replace(pattern, (match, c, s, k, n, index) => {
-      html += escape(code.slice(last, index));
-      html += `<span class="${c ? "c" : s ? "s" : k ? "k" : "n"}">${escape(match)}</span>`;
-      last = index + match.length;
-      return match;
-    });
-    return html + escape(code.slice(last));
-  }
-
-  document.querySelectorAll("section[data-sequence]").forEach(renderSequence);
-  document.querySelectorAll("section[data-recap]").forEach(renderRecap);
-  document.querySelectorAll("pre.code").forEach(pre => {
-    const marks = (pre.dataset.mark ?? "").split(",").filter(Boolean).map(Number);
-    pre.innerHTML = highlight(pre.textContent, pre.dataset.lang).split("\n")
-      .map((line, i) => marks.includes(i + 1) ? `<span class="mark">${line || " "}</span>` : line).join("\n");
-  });
-
-  const slides = [...document.querySelectorAll("section")];
-  const progress = document.getElementById("progress");
-  progress.innerHTML = parts.map(() => "<i></i>").join("");
-
-  function show(id) {
-    const slide = slides.find(s => s.id === id) ?? slides[0];
-    slides.forEach(s => s.classList.toggle("active", s === slide));
-    const part = Number(slide.dataset.part);
-    document.getElementById("part-name").textContent = parts[part];
-    [...progress.children].forEach((bar, i) => bar.className = i < part ? "done" : i === part ? "now" : "");
-  }
-
-  function fit() {
-    const scale = Math.min(innerWidth / 1920, innerHeight / 1080);
-    document.body.style.transform = scale < 1 ? `scale(${scale})` : "";
-  }
-
-  addEventListener("hashchange", () => show(location.hash.slice(1)));
-  addEventListener("resize", fit);
-  addEventListener("keydown", e => {
-    const i = slides.findIndex(s => s.classList.contains("active"));
-    const next = e.key === "ArrowRight" || e.key === " " ? i + 1 : e.key === "ArrowLeft" ? i - 1 : i;
-    if (next !== i && slides[next]) location.hash = slides[next].id;
-  });
-  show(location.hash.slice(1));
-  fit();
-</script>
+<script src="../assets/slides.js"></script>
 </body>
 </html>

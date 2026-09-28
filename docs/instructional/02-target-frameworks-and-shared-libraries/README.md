@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work packages:** prerequisite for all; fixes handover issue #1 · **Prerequisites:** 01
 
-**Audio lesson:** [02-target-frameworks-and-shared-libraries.mp3](02-target-frameworks-and-shared-libraries.mp3) · [Transcript](script.md)
+**Video:** [02-target-frameworks-and-shared-libraries.mp4](02-target-frameworks-and-shared-libraries.mp4) · [Slides](slides.html) · **Audio lesson:** [02-target-frameworks-and-shared-libraries.mp3](02-target-frameworks-and-shared-libraries.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

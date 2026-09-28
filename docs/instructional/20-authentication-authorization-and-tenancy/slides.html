@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 20 Slides</title>
+<!--
+  Slides for the lesson 20 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="20" data-lesson-title="Authentication, Authorization and Tenancy" data-parts="Introduction|The questions|What legacy checks|OIDC and the BFF|The transition|Roles to policies|Tenant isolation|Audit trail|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 20</div>
+  <h1>Authentication, Authorization<br>and Tenancy</h1>
+  <p class="lead">Who the caller is, what they may do, and which firm's data they may see</p>
+</section>
+
+<section id="two-demands" data-part="0" data-cue="Enterprise clients want to sign in with their own identity provider">
+  <h2>What every enterprise client asks</h2>
+  <div class="cols">
+    <div class="card"><h3>"Can we use our own identity provider?"</h3><p>Sign-in with their corporate accounts.</p></div>
+    <div class="card legacy"><h3 class="amber">"How do you stop Firm A seeing Firm B?"</h3><p>Tenant isolation a test can prove.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="Here are the questions this lesson prepares you for.">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>How do you migrate from Forms auth to OIDC without logging everyone out?</li>
+    <li>How do you enforce tenant isolation?</li>
+    <li>Roles or policies?</li>
+    <li>Where should tokens live in a browser application?</li>
+    <li>What would you fix first in this legacy authentication?</li>
+  </ul>
+</section>
+
+<section id="two-facts" data-part="1" data-cue="Let's start with two facts from the code">
+  <h2>Two facts about <span class="accent">maple.ops</span></h2>
+  <p class="muted small">Firm 1 (Maple Ridge) · role: BillingReviewer only</p>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Can start a billing run</h3><p>For any firm. The start-run endpoint only checks that the caller is signed in.</p></div>
+    <div class="card legacy"><h3 class="amber">Can list another firm's accounts</h3><p>All 500 of Groupe Financier Laurentien's, via the migrated Accounts API, by changing <b>firmId=1</b> to <b>firmId=2</b>.</p></div>
+  </div>
+  <p class="red" style="margin-top:32px">Nothing checks which firm the caller belongs to.</p>
+</section>
+
+<!-- ───────────── What legacy checks ───────────── -->
+<section id="six-things" data-part="2" data-cue="Before you design anything new, inventory what exists.">
+  <h2>Inventory Forms auth: six things</h2>
+  <div class="cols3">
+    <div class="card"><h3>The cookie</h3></div>
+    <div class="card"><h3>The machine key</h3></div>
+    <div class="card"><h3>Membership and role providers</h3></div>
+    <div class="card"><h3>Password storage</h3></div>
+    <div class="card"><h3>Lockout</h3></div>
+    <div class="card"><h3>Anti-forgery</h3></div>
+  </div>
+</section>
+
+<section id="cookie" data-part="2" data-cue="The cookie is configured in legacy/FeeBilling.Web/Web.config.">
+  <h2>The cookie</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code tight" data-lang="xml" data-mark="2">&lt;authentication mode="Forms"&gt;
+  &lt;forms loginUrl="~/Account/Login" name=".FEEBILLINGAUTH" timeout="120" slidingExpiration="true" /&gt;
+&lt;/authentication&gt;</pre>
+  <p>120-minute sliding timeout: how long old sessions can live after the switch.</p>
+</section>
+
+<section id="machine-key" data-part="2" data-cue="The cookie is encrypted and signed with the machineKey">
+  <h2>The machine key is committed</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config (key values elided)</div>
+  <pre class="code" data-lang="xml" data-mark="1">&lt;machineKey validationKey="…"
+            decryptionKey="…"
+            validation="HMACSHA256" decryption="AES" /&gt;</pre>
+  <p>A second one for a single-tenant client in <b>Web.ClientX.config</b>, next to database passwords.</p>
+  <p class="amber">Ever committed = compromised. Rotate.</p>
+</section>
+
+<section id="lockout" data-part="2" data-cue="Users live in a table called AppUsers">
+  <h2>No lockout</h2>
+  <div class="file">legacy/FeeBilling.Web/Security/FeeBillingMembershipProvider.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">public override int MaxInvalidPasswordAttempts { get { return int.MaxValue; } }   // no lockout</pre>
+  <p>Custom membership provider over <b>AppUsers</b>, plain ADO.NET. An attacker can guess passwords forever.</p>
+</section>
+
+<section id="password-hash" data-part="2" data-cue="Password storage is in PasswordHasher.cs.">
+  <h2>Password storage</h2>
+  <div class="file">legacy/FeeBilling.Web/Security/PasswordHasher.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,5,6,10">// SHA1(salt + password), base64. Written in 2011. Unsalted-iteration SHA1 is not a password hash.
+public static class PasswordHasher
+{
+    // …
+            var bytes = Encoding.Unicode.GetBytes(salt + password);
+            return Convert.ToBase64String(sha1.ComputeHash(bytes));
+    // …
+    public static bool Verify(string salt, string password, string expectedHash)
+    {
+        return Hash(salt, password) == expectedHash;   // not constant-time
+    }
+}</pre>
+</section>
+
+<section id="roles-cookie" data-part="2" data-cue="Roles come from a custom role provider">
+  <h2>Roles cached in a cookie</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code tight" data-lang="xml" data-mark="1">&lt;roleManager enabled="true" defaultProvider="FeeBillingRoles" cacheRolesInCookie="true"&gt;</pre>
+  <p>Revoke a role, and the user keeps it until the roles cookie expires.</p>
+</section>
+
+<section id="global-authorize" data-part="2" data-cue="Now authorization.">
+  <h2>Authenticated is not authorized</h2>
+  <div class="file">legacy/FeeBilling.Web/App_Start/WebApiConfig.cs</div>
+  <pre class="code" data-lang="cs" data-mark="2">// Everything under /api requires a Forms-auth cookie.
+config.Filters.Add(new AuthorizeAttribute());</pre>
+  <p>That means signed in. It doesn't mean allowed.</p>
+</section>
+
+<section id="role-checks" data-part="2" data-cue="Only a few actions add a role on top.">
+  <h2>Where roles are checked, and where not</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/BillingController.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="2,5">[HttpPost, Route("runs")]
+public IHttpActionResult StartRun(BillingRunRequest req)
+// …
+[HttpPost, Route("runs/{id:int}/approve")]
+[Authorize(Roles = "BillingAdmin")]
+public IHttpActionResult ApproveRun(int id)</pre>
+  <p class="small"><span class="amber">StartRun</span> has no role check. <span class="accent">ApproveRun</span> requires BillingAdmin.</p>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/FeeSchedulesController.cs</div>
+  <pre class="code tight" data-lang="cs">[Authorize(Roles = "ScheduleEditor")]
+// …
+            // No audit trail beyond ModifiedBy (FB-340).</pre>
+</section>
+
+<section id="anti-forgery" data-part="2" data-cue="Finally, anti-forgery.">
+  <h2>Anti-forgery</h2>
+  <div class="file">legacy/FeeBilling.Web/App/services/api.service.js</div>
+  <pre class="code tight" data-lang="js" data-mark="1">// TODO FB-279: POSTs don't send the anti-forgery token. Web API doesn't check it anyway.</pre>
+  <p class="amber">Remember this one: it becomes critical once we move to cookies done properly.</p>
+</section>
+
+<section id="inventory-summary" data-part="2" data-cue="So the inventory reads:">
+  <h2>The inventory</h2>
+  <ul>
+    <li class="small">Weak password storage · no lockout · committed keys · stale roles</li>
+    <li class="small">Above all: <span class="red">no firm check anywhere</span></li>
+  </ul>
+  <div class="file" style="margin-top:28px">database/billing/001-schema.sql · dbo.AppUsers</div>
+  <pre class="code" data-lang="sql" data-mark="1">FirmId          int             NULL,           -- NULL = vendor staff (sees all firms)</pre>
+  <p class="muted">The column exists. Nothing enforces it.</p>
+</section>
+
+<!-- ───────────── OIDC and the BFF ───────────── -->
+<section id="target" data-part="3" data-cue="The target design has three parts.">
+  <h2>The target</h2>
+  <svg width="1640" height="520" viewBox="0 0 1640 520">
+    <defs><marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="190" width="260" height="130" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="130" y="248" fill="#e8eef8" font-size="30" text-anchor="middle">Browser</text>
+    <text x="130" y="288" fill="#8ea2c0" font-size="22" text-anchor="middle">cookie only</text>
+    <line x1="265" y1="255" x2="495" y2="255" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="380" y="235" fill="#38bdf8" font-size="22" text-anchor="middle">HttpOnly cookie</text>
+    <rect x="505" y="170" width="420" height="170" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="715" y="238" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Gateway (BFF)</text>
+    <text x="715" y="282" fill="#8ea2c0" font-size="24" text-anchor="middle">runs OIDC, holds tokens</text>
+    <line x1="715" y1="165" x2="715" y2="110" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="455" y="10" width="520" height="95" rx="18" fill="#221b0d" stroke="#f5b544" stroke-width="3"/>
+    <text x="715" y="52" fill="#e8eef8" font-size="28" font-weight="600" text-anchor="middle">Entra ID</text>
+    <text x="715" y="88" fill="#8ea2c0" font-size="22" text-anchor="middle">each client can federate its own IdP</text>
+    <line x1="930" y1="255" x2="1180" y2="255" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="1055" y="235" fill="#38bdf8" font-size="22" text-anchor="middle">Bearer token</text>
+    <text x="1055" y="300" fill="#8ea2c0" font-size="20" text-anchor="middle">YARP request transform</text>
+    <rect x="1190" y="170" width="450" height="170" rx="18" fill="#121b2f" stroke="#38bdf8" stroke-width="3"/>
+    <text x="1415" y="238" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">APIs</text>
+    <text x="1415" y="282" fill="#8ea2c0" font-size="24" text-anchor="middle">JWT bearer validation</text>
+    <text x="1415" y="390" fill="#8ea2c0" font-size="22" text-anchor="middle">issuer · audience · signature · expiry</text>
+  </svg>
+</section>
+
+<section id="oidc" data-part="3" data-cue="First, identity moves to an external identity provider">
+  <h2>1 · An external identity provider</h2>
+  <ul>
+    <li>OpenID Connect with <span class="accent">Microsoft Entra ID</span></li>
+    <li>Designed for per-client federation: employees sign in with their corporate accounts</li>
+    <li>FeeBilling never stores their passwords</li>
+  </ul>
+</section>
+
+<section id="bff" data-part="3" data-cue="Second, the gateway becomes a backend for frontend">
+  <h2>2 · The gateway is a backend for frontend</h2>
+  <ul>
+    <li class="small">Runs the OIDC authorization code flow</li>
+    <li class="small">Holds the tokens: encrypted ticket or server-side session store</li>
+    <li class="small">Gives the browser a cookie that's <b>HttpOnly</b> · <b>Secure</b> · <b>SameSite</b></li>
+    <li class="small">The access token never reaches JavaScript: less for an XSS bug to steal</li>
+  </ul>
+</section>
+
+<section id="bearer" data-part="3" data-cue="Third, when the gateway forwards a request to an API">
+  <h2>3 · APIs validate bearer tokens</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="cs">builder.Services.AddAuthentication()
+    .AddJwtBearer(options =>
+    {
+        options.Authority = builder.Configuration["Auth:Authority"];
+        options.Audience = builder.Configuration["Auth:Audience"];
+    });</pre>
+  <p class="muted small">A YARP request transform attaches the access token when the gateway forwards.</p>
+</section>
+
+<section id="trusted-headers" data-part="3" data-cue="There's a simpler alternative worth naming">
+  <h2>Why not trust gateway headers?</h2>
+  <p>Only safe if the APIs are <span class="amber">unreachable</span> except through the gateway.</p>
+  <p class="muted">Anyone who reaches an API directly can forge the header. Token validation is defence in depth.</p>
+</section>
+
+<section id="bff-details" data-part="3" data-cue="Two details make the BFF work in production.">
+  <h2>Making the BFF work in production</h2>
+  <div class="cols">
+    <div class="card"><h3>Refresh tokens</h3><p>Access tokens expire (typically ~1 hour). The BFF must refresh them, or sessions break silently.</p></div>
+    <div class="card"><h3>Server-side ticket store</h3><p>Saved tokens make cookies large. Keep only a session ID in the browser.</p></div>
+  </div>
+</section>
+
+<section id="data-protection" data-part="3" data-cue="The machineKey also has a modern replacement">
+  <h2>machineKey → Data Protection key ring</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="cs" data-mark="2">builder.Services.AddDataProtection()
+    .SetApplicationName("FeeBilling")
+    .PersistKeysToAzureBlobStorage(keyBlobUri, credential)
+    .ProtectKeysWithAzureKeyVault(keyVaultKeyId, credential);</pre>
+  <p class="muted small">Without a persisted, shared key ring, every restart or scale-out invalidates every cookie.</p>
+</section>
+
+<!-- ───────────── The transition ───────────── -->
+<template id="transition">
+  <h2>Signing in once</h2>
+  <ol>
+    <li class="item">Map existing users to IdP identities (with reconciliation)</li>
+    <li class="item">Switch sign-in per firm, with a flag</li>
+    <li class="item">Legacy trusts the new identity: OIDC client, or a shared cookie</li>
+    <li class="item">Let old Forms cookies expire (120-minute sliding timeout)</li>
+    <li class="item">Never force a password reset as the mechanism</li>
+  </ol>
+</template>
+<section id="transition-0" data-part="4" data-cue="You can't switch every firm to a new sign-in method on one night." data-template="transition"></section>
+<section id="transition-1" data-part="4" data-cue="Start by mapping existing users" data-template="transition" data-highlight="1"></section>
+<section id="transition-2" data-part="4" data-cue="Then switch sign-in per firm with a flag." data-template="transition" data-highlight="2"></section>
+<section id="transition-3" data-part="4" data-cue="The hard requirement is that users sign in once." data-template="transition" data-highlight="3"></section>
+<section id="transition-4" data-part="4" data-cue="And you let old Forms cookies expire naturally." data-template="transition" data-highlight="4-5"></section>
+
+<section id="local-passwords" data-part="4" data-cue="If some local passwords survive">
+  <h2>If local passwords survive</h2>
+  <ul>
+    <li>Verify the old SHA-1 hash once, with a constant-time comparison: <span class="accent">CryptographicOperations.FixedTimeEquals</span></li>
+    <li>On that successful login, rehash with ASP.NET Core Identity's <span class="accent">PasswordHasher</span> (PBKDF2)</li>
+    <li>Better: move those users to the identity provider too</li>
+  </ul>
+</section>
+
+<!-- ───────────── Roles to policies ───────────── -->
+<section id="role-vs-policy" data-part="5" data-cue="A role is a fact about a user">
+  <h2>Roles and policies</h2>
+  <div class="cols">
+    <div class="card"><h3>Role: a fact about a user</h3><p>"This person is a billing admin."</p></div>
+    <div class="card modern"><h3>Policy: a rule for an action</h3><p>"May this caller start a billing run?"</p></div>
+  </div>
+  <p style="margin-top:36px">Endpoints reference policies: change who may do something in <span class="accent">one place</span>.</p>
+</section>
+
+<section id="policy-map" data-part="5" data-cue="For FeeBilling, the mapping looks like this.">
+  <h2>FeeBilling's policies</h2>
+  <table>
+    <tr><th>Policy</th><th>Replaces</th><th>Rule</th></tr>
+    <tr><td>CanViewBilling</td><td>Global authorize filter</td><td>Reviewer or admin + firm claim (or vendor staff)</td></tr>
+    <tr><td>CanStartBillingRun</td><td class="amber">Nothing: any signed-in user</td><td>BillingAdmin + run's firm = caller's firm</td></tr>
+    <tr><td>CanApproveInvoices</td><td>Roles = "BillingAdmin"</td><td>+ optional four-eyes rule</td></tr>
+    <tr><td>CanEditFeeSchedules</td><td>Roles = "ScheduleEditor"</td><td>+ schedule's firm matches (templates have none)</td></tr>
+  </table>
+</section>
+
+<section id="policy-code" data-part="5" data-cue="In ASP.NET Core, you define these with AddAuthorizationBuilder">
+  <h2>Policies in ASP.NET Core</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="3,6">builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("CanStartBillingRun", policy => policy.RequireRole("BillingAdmin"))
+    .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
+
+app.MapPost("/api/billing/runs", StartRun)
+    .RequireAuthorization("CanStartBillingRun");</pre>
+  <p class="muted small">"For this firm?" is a resource-based check: the role alone can't answer it.</p>
+</section>
+
+<section id="role-claim" data-part="5" data-cue="One trap here catches almost everyone.">
+  <h2>The role claim trap</h2>
+  <div class="file">Sketch · JWT bearer options</div>
+  <pre class="code" data-lang="cs" data-mark="2">options.MapInboundClaims = false;
+options.TokenValidationParameters.RoleClaimType = "roles";</pre>
+  <ul>
+    <li class="small">Mapping off without this: RequireRole never matches, every call is 403</li>
+    <li class="small">Mapping on: long schema URLs in some places, short names in others</li>
+  </ul>
+</section>
+
+<!-- ───────────── Tenant isolation ───────────── -->
+<section id="idor" data-part="6" data-cue="Now the most important section.">
+  <h2>An IDOR in the migrated API</h2>
+  <div class="file">src/FeeBilling.Accounts.Api/Accounts/AccountsEndpoints.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="2,10">private static async Task&lt;Ok&lt;List&lt;AccountDto&gt;&gt;&gt; ListAccounts(
+    int firmId,
+    string? search,
+    FeeBillingDbContext db,
+    CancellationToken cancellationToken)
+{
+    var query = db.Accounts
+        .AsNoTracking()
+        .Include(a => a.Household)
+        .Where(a => a.FirmId == firmId);</pre>
+  <p>The caller chooses the firm. A query-string value is a <span class="amber">filter</span>, not an authorization decision.</p>
+</section>
+
+<section id="prove-it" data-part="6" data-cue="You can prove it with a test.">
+  <h2>Prove it with a test</h2>
+  <div class="file">Sketch · tests/FeeBilling.Accounts.Api.Tests</div>
+  <pre class="code tight" data-lang="cs" data-mark="3">var accounts = await fixture.CreateAuthenticatedClient("maple.ops")
+    .GetFromJsonAsync&lt;List&lt;AccountDto&gt;&gt;("/api/accounts?firmId=2", ct);
+Assert.Empty(accounts);   // fails today: Laurentien's 500 accounts</pre>
+  <div class="file">tests/FeeBilling.Accounts.Api.Tests/Infrastructure/TestAuthHandler.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">var identity = new ClaimsIdentity([new Claim(ClaimTypes.Name, userName!)], SchemeName);</pre>
+  <p class="muted small">Only a name claim: teach it to issue firm and role claims.</p>
+</section>
+
+<section id="layers" data-part="6" data-cue="The fix comes in layers.">
+  <h2>The fix, in layers</h2>
+  <ol>
+    <li class="small">The tenant comes from a trusted <b>firm_id</b> claim, via a small <b>ITenantContext</b></li>
+    <li class="small">Endpoints stop accepting a firm ID from callers who have one</li>
+    <li class="small">The data layer enforces it anyway: an EF Core global query filter</li>
+  </ol>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="7">public class FeeBillingDbContext(DbContextOptions&lt;FeeBillingDbContext&gt; options, ITenantContext tenant)
+    : DbContext(options)
+{
+    private readonly int? _firmId = tenant.FirmId;
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder) =>
+        modelBuilder.Entity&lt;Account&gt;().HasQueryFilter(a => a.FirmId == _firmId);
+}</pre>
+</section>
+
+<section id="named-filters" data-part="6" data-cue="EF Core 10 adds named query filters">
+  <h2>EF Core 10: named query filters</h2>
+  <p>Tenant and soft-delete filters can be ignored <span class="accent">independently</span>.</p>
+  <p class="muted">Before: one filter per entity, so ignoring filters removed both. Check the exact overloads for your version.</p>
+</section>
+
+<section id="vendor-staff" data-part="6" data-cue="Vendor staff are real users, with a null firm.">
+  <h2>Vendor staff: an explicit mode</h2>
+  <p>Model them as an explicit, <span class="accent">logged</span> mode, not as "no filter".</p>
+  <p class="muted">Otherwise a support engineer's query silently becomes cross-tenant, and nobody can tell afterwards.</p>
+</section>
+
+<section id="bypasses" data-part="6" data-cue="Then know the ways around a query filter">
+  <h2>Ways around a query filter</h2>
+  <ul>
+    <li class="small"><b>IgnoreQueryFilters</b></li>
+    <li class="small">Raw SQL: <b>FromSql</b>, <b>SqlQuery</b></li>
+    <li class="small">Stored procedures: <b>usp_GetBillableAum</b> takes an account ID and trusts it</li>
+    <li class="small">Dapper, which bypasses EF Core entirely</li>
+    <li class="small">DbContext pooling, if the tenant is captured at construction</li>
+  </ul>
+  <p class="amber" style="margin-top:24px">Each one a reviewed exception, backed by an architecture test or analyzer.</p>
+</section>
+
+<section id="walk-endpoints" data-part="6" data-cue="Finally, the test that makes isolation provable.">
+  <h2>One test that walks every endpoint</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs">var endpoints = factory.Services.GetRequiredService&lt;EndpointDataSource&gt;().Endpoints
+    .OfType&lt;RouteEndpoint&gt;()
+    .Where(e => e.Metadata.GetMetadata&lt;IHttpMethodMetadata&gt;()?.HttpMethods.Contains("GET") == true);
+
+// Call each as a firm 1 user, with firm 2 identifiers. Expect 404 or 403 from every one.</pre>
+  <p class="accent">An endpoint added next month is covered automatically.</p>
+</section>
+
+<!-- ───────────── Audit trail ───────────── -->
+<section id="fb-340" data-part="7" data-cue="Fee schedules decide what clients pay">
+  <h2>No audit trail</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/FeeSchedulesController.cs</div>
+  <pre class="code" data-lang="cs" data-mark="3,7,8">public IHttpActionResult CreateSchedule(FeeScheduleDto dto)
+// …
+    // No audit trail beyond ModifiedBy (FB-340).
+// …
+public IHttpActionResult UpdateSchedule(int id, FeeScheduleDto dto)
+// …
+    // Changing a schedule mid-quarter changes every open invoice that uses it.
+    // Nothing stops that.</pre>
+</section>
+
+<section id="audit" data-part="7" data-cue="A proper audit record captures who, when">
+  <h2>A proper audit record</h2>
+  <p>Who · when · which schedule · before and after values of every tier</p>
+  <p class="muted small">"Who" is the immutable subject ID from the token, not a display name.</p>
+  <div class="cols">
+    <div class="card modern"><h3>SaveChangesInterceptor</h3><p>Append-only audit table, same transaction as the change.</p></div>
+    <div class="card modern"><h3>SQL Server temporal tables</h3><p>Full row history; EF Core supports them with <b>IsTemporal</b>.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<template id="traps-list">
+  <h2>Traps</h2>
+  <div class="cols">
+    <ul>
+      <li class="item small">Taking the tenant from the request</li>
+      <li class="item small">Treating authenticated as authorized</li>
+      <li class="item small">The wrong role claim type</li>
+      <li class="item small">Vendor staff as "no filter"</li>
+    </ul>
+    <ul>
+      <li class="item small">Forgetting the filter bypasses</li>
+      <li class="item small">Cookies bring back CSRF (FB-279)</li>
+      <li class="item small">Not saying how long revocation takes</li>
+      <li class="item small">Auditing by display name</li>
+    </ul>
+  </div>
+</template>
+<section id="traps-1" data-part="8" data-cue="Taking the tenant from the request." data-template="traps-list" data-show="4"></section>
+<section id="traps-2" data-part="8" data-cue="Forgetting the filter bypasses:" data-template="traps-list" data-show="8"></section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="9" data-cue="Let's practise.">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="9" data-cue="How do you migrate from Forms authentication to OIDC without logging everyone out?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">How do you migrate from Forms authentication to OIDC without logging everyone out?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="9" data-cue="First, map existing users to identity provider identities">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Map users to IdP identities, with reconciliation</li>
+    <li>Both sign-in paths for a window, switched per firm</li>
+    <li>Legacy trusts the new identity: SSO client or shared cookie</li>
+    <li>Old cookies expire (120 minutes); never a forced reset</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="9" data-cue="How do you enforce tenant isolation?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">How do you enforce tenant isolation?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="9" data-cue="The tenant comes from a trusted claim in the validated token">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Tenant from a trusted claim, never the query string or body</li>
+    <li>Data layer: EF Core global query filters</li>
+    <li>HTTP layer: a test that walks every endpoint</li>
+    <li>Bypasses are reviewed exceptions; vendor staff an audited mode</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="9" data-cue="Roles or policies?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">Roles or policies?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="9" data-cue="A role is a fact about a user; a policy is a rule for an action">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Role = fact about a user; policy = rule for an action</li>
+    <li>Endpoints reference policies: one change, one place</li>
+    <li>Policies combine roles, claims and resource checks</li>
+    <li>A fallback policy: nothing accidentally anonymous</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="9" data-cue="Where should tokens live in a browser application?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">Where should tokens live in a browser application?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="9" data-cue="Nowhere JavaScript can read them.">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Nowhere JavaScript can read them</li>
+    <li>BFF gateway runs OIDC, keeps tokens server-side</li>
+    <li>SPA gets an HttpOnly, Secure, SameSite cookie</li>
+    <li>Cookies bring back CSRF: antiforgery on state changes</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="9" data-cue="What would you fix first in this legacy authentication?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">What would you fix first in this legacy authentication?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="9" data-cue="The missing tenant check">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>The missing tenant check in the migrated Accounts API</li>
+    <li>The missing role check on starting a billing run</li>
+    <li>Rotate committed machine keys and passwords now</li>
+    <li>SHA-1 hashing matters less once passwords move to the IdP</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Authenticated is not authorized: legacy never checks your firm.</li>
+    <li class="item">OIDC with the gateway as a BFF: tokens out of the browser, APIs validate bearer tokens.</li>
+    <li class="item">Users sign in once: switch firm by firm, legacy trusts the new identity.</li>
+    <li class="item">Endpoints reference policies, with a fallback policy.</li>
+    <li class="item">Tenant from a claim, enforced by query filters, proven by an endpoint-walking test.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember from this lesson." data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: authenticated is not authorized." data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: the target is OIDC" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: during the transition, users sign in once." data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: endpoints reference policies, not roles" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: the tenant comes from a claim" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="10" data-cue="In the next lesson, we'll look at System.Drawing and PDF generation">
+  <div class="kicker">Next</div>
+  <h1>21 · System.Drawing and PDF Generation</h1>
+  <p class="lead">A Windows-only dependency, and the bugs IIS hid for years.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

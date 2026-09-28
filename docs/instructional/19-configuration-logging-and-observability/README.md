@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-07 · **Prerequisites:** 08, 09
 
-**Audio lesson:** [19-configuration-logging-and-observability.mp3](19-configuration-logging-and-observability.mp3) · [Transcript](script.md)
+**Video:** [19-configuration-logging-and-observability.mp4](19-configuration-logging-and-observability.mp4) · [Slides](slides.html) · **Audio lesson:** [19-configuration-logging-and-observability.mp3](19-configuration-logging-and-observability.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

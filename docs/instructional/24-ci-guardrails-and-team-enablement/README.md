@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work packages:** all (cross-cutting) · **Prerequisites:** 01, 04; ideally the whole series
 
-**Audio lesson:** [24-ci-guardrails-and-team-enablement.mp3](24-ci-guardrails-and-team-enablement.mp3) · [Transcript](script.md)
+**Video:** [24-ci-guardrails-and-team-enablement.mp4](24-ci-guardrails-and-team-enablement.mp4) · [Slides](slides.html) · **Audio lesson:** [24-ci-guardrails-and-team-enablement.mp3](24-ci-guardrails-and-team-enablement.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 03 Slides</title>
+<!--
+  Slides for the lesson 03 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="03" data-lesson-title="Project System and Dependency Assessment" data-parts="Introduction|The questions|SDK-style projects|Shared build settings|Dependency triage|Security and licences|Framework-only APIs|What tools do|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 03</div>
+  <h1>Project System and<br>Dependency Assessment</h1>
+  <p class="lead">Know what you're standing on before you move a single line of code</p>
+</section>
+
+<section id="first-restore" data-part="0" data-cue="As you'll hear, its very first package restore">
+  <h2>The first restore is already an audit</h2>
+  <pre class="code" data-lang="sh" data-mark="2">$ dotnet restore legacy/FeeBilling.sln
+NU1904: Package 'log4net' 2.0.8 has a known critical severity vulnerability</pre>
+  <p class="muted">A critical vulnerability in the logging library, before anyone planned an audit.</p>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>How do you assess a .NET Framework codebase before migrating it?</li>
+    <li>What does Upgrade Assistant, or Copilot app modernization, do and not do?</li>
+    <li>How do you manage package versions across twenty projects?</li>
+    <li>A package you depend on went commercial: what do you do?</li>
+    <li>What's the risk in converting packages.config to package references?</li>
+  </ul>
+</section>
+
+<section id="artifacts" data-part="1" data-cue="The theme of the whole lesson is this">
+  <h2>An assessment produces artifacts, not a gut feel</h2>
+  <div class="grid7" style="grid-template-columns: repeat(4, 1fr)">
+    <div class="card"><h3>Triage table</h3><p>Keep, upgrade, replace or remove, per package, with a reason</p></div>
+    <div class="card"><h3>API inventory</h3><p>Framework-only API usage, grouped and counted</p></div>
+    <div class="card"><h3>Audit policy</h3><p>What fails the build, what gets fixed now</p></div>
+    <div class="card"><h3>Risk register</h3><p>What can go wrong, and how bad</p></div>
+  </div>
+  <p class="accent" style="margin-top:40px">Then, and only then, a plan.</p>
+</section>
+
+<!-- ───────────── SDK-style projects ───────────── -->
+<section id="old-style" data-part="2" data-cue="An old-style .NET Framework project file is verbose">
+  <h2>Old-style project files</h2>
+  <div class="file">Sketch · old-style project file and packages.config (illustrative)</div>
+  <pre class="code tight" data-lang="xml" data-mark="1,2,4">&lt;Compile Include="FeeCalculator.cs" /&gt;
+&lt;Compile Include="AumService.cs" /&gt;
+&lt;Reference Include="log4net"&gt;
+  &lt;HintPath&gt;..\packages\log4net.2.0.8\lib\net45-full\log4net.dll&lt;/HintPath&gt;
+&lt;/Reference&gt;</pre>
+  <pre class="code tight" data-lang="xml">&lt;package id="log4net" version="2.0.8" targetFramework="net472" /&gt;</pre>
+  <ul class="small">
+    <li class="small">Every source file listed; packages via HintPath into a packages folder</li>
+    <li class="small">Every transitive dependency listed by hand; binding redirects often hand-maintained</li>
+  </ul>
+</section>
+
+<section id="sdk-style" data-part="2" data-cue="An SDK-style project is much smaller">
+  <h2>SDK-style: the whole project file</h2>
+  <div class="file">legacy/FeeBilling.Core/FeeBilling.Core.csproj</div>
+  <pre class="code tight" data-lang="xml" data-mark="4,9,10">&lt;Project Sdk="Microsoft.NET.Sdk"&gt;
+
+  &lt;PropertyGroup&gt;
+    &lt;TargetFramework&gt;net472&lt;/TargetFramework&gt;
+    &lt;RootNamespace&gt;FeeBilling.Core&lt;/RootNamespace&gt;
+    &lt;AssemblyName&gt;FeeBilling.Core&lt;/AssemblyName&gt;
+  &lt;/PropertyGroup&gt;
+
+  &lt;ItemGroup&gt;
+    &lt;PackageReference Include="EntityFramework" Version="6.4.4" /&gt;
+    &lt;PackageReference Include="log4net" Version="2.0.8" /&gt;
+  &lt;/ItemGroup&gt;</pre>
+  <p class="small muted">Sources by globbing · PackageReference with transitive restore · reference assemblies from NuGet</p>
+</section>
+
+<section id="repo-detail" data-part="2" data-cue="Now, a detail about this repository">
+  <h2>A detail about this repository</h2>
+  <div class="file">legacy/README.md · How this differs from the real thing</div>
+  <pre class="code tight" data-lang="md" data-mark="3">The real solution uses old-style `.csproj` files with `packages.config`, builds in Visual Studio,
+and deploys to IIS. …
+- **SDK-style `net472` projects.** They compile against `Microsoft.NETFramework.ReferenceAssemblies`,
+  so no targeting pack is needed.</pre>
+  <p class="muted">Converted so the legacy code builds with the dotnet CLI on any machine. Still net472.</p>
+</section>
+
+<section id="edmx-split" data-part="2" data-cue="That conversion needed two workarounds">
+  <h2>Workaround 1: splitting the EDMX</h2>
+  <div class="file">legacy/FeeBilling.Data/FeeBilling.Data.csproj</div>
+  <pre class="code tight" data-lang="xml" data-mark="1,6">&lt;Target Name="SplitEdmx" BeforeTargets="BeforeBuild"&gt;
+  &lt;PropertyGroup&gt;
+    &lt;!-- … --&gt;
+  &lt;/PropertyGroup&gt;
+  &lt;XmlPeek XmlInputPath="FeeBilling.edmx" Namespaces="$(_EdmxNamespaces)"
+           Query="/edmx:Edmx/edmx:Runtime/edmx:ConceptualModels/*"&gt;</pre>
+  <p class="small muted">Replaces Visual Studio's EntityDeploy task, which ships with Visual Studio, not with the EF6 package: conceptual, storage and mapping models become embedded resources.</p>
+</section>
+
+<section id="t4" data-part="2" data-cue="Second, the T4 templates that generated the entity classes were removed">
+  <h2>Workaround 2: T4 output checked in</h2>
+  <div class="file">legacy/FeeBilling.Data/Model/FeeBilling.Context.cs</div>
+  <pre class="code" data-lang="cs" data-mark="3">//------------------------------------------------------------------------------
+// &lt;auto-generated&gt;
+//     This code was generated from a template.
+//
+//     Manual changes to this file may cause unexpected behavior in your application.
+//     Manual changes to this file will be overwritten if the code is regenerated.
+// &lt;/auto-generated&gt;</pre>
+</section>
+
+<section id="build-not-migration" data-part="2" data-cue="The interview point here is: converting to SDK-style net472 makes the build modern">
+  <div class="kicker">The interview point</div>
+  <p class="quote">SDK-style <span class="amber">net472</span> makes the build modern. It doesn't move anything to <span class="accent">.NET 10</span>.</p>
+</section>
+
+<section id="conversion-trap" data-part="2" data-cue="And there's a trap in the conversion itself">
+  <h2>What the conversion silently drops</h2>
+  <ul>
+    <li><b>install.ps1</b> scripts don't run under PackageReference</li>
+    <li><b>Content transforms</b> (like editing Web.config on install) don't run either</li>
+    <li>Transitive dependencies go from explicit to implicit</li>
+    <li>Binding redirects need regenerating</li>
+    <li class="muted">Visual Studio's migration command doesn't support every project type: check first</li>
+  </ul>
+</section>
+
+<!-- ───────────── Shared build infrastructure ───────────── -->
+<section id="nearest-wins" data-part="3" data-cue="Directory.Build.props is a file MSBuild finds by walking up the folder tree">
+  <h2>Directory.Build.props: the nearest one wins</h2>
+  <svg width="1640" height="420" viewBox="0 0 1640 420">
+    <rect x="0" y="10" width="1640" height="90" rx="16" fill="#121b2f" stroke="#38bdf8" stroke-width="3"/>
+    <text x="40" y="66" fill="#e8eef8" font-size="32" font-weight="600">Directory.Build.props</text>
+    <text x="440" y="66" fill="#8ea2c0" font-size="26">repo root · LangVersion latest · nullable · warnings as errors</text>
+    <rect x="60" y="150" width="480" height="110" rx="16" fill="#0f2233" stroke="#38bdf8" stroke-width="2"/>
+    <text x="300" y="215" fill="#e8eef8" font-size="30" text-anchor="middle">src/ and tests/</text>
+    <rect x="600" y="150" width="1040" height="250" rx="16" fill="#221b0d" stroke="#f5b544" stroke-width="3"/>
+    <text x="640" y="210" fill="#e8eef8" font-size="32" font-weight="600">legacy/Directory.Build.props</text>
+    <text x="640" y="256" fill="#8ea2c0" font-size="26">nearer, so it wins for legacy projects</text>
+    <text x="640" y="300" fill="#f5b544" font-size="26">deliberately doesn't import the root file</text>
+    <text x="640" y="360" fill="#8ea2c0" font-size="26">C# 7.3 · no nullable · no warnings as errors</text>
+  </svg>
+</section>
+
+<section id="root-props" data-part="3" data-cue="The root Directory.Build.props applies to everything under src and tests">
+  <h2>The root settings</h2>
+  <div class="file">Directory.Build.props</div>
+  <pre class="code" data-lang="xml" data-mark="2,3,4,5">&lt;PropertyGroup&gt;
+  &lt;LangVersion&gt;latest&lt;/LangVersion&gt;
+  &lt;Nullable&gt;enable&lt;/Nullable&gt;
+  &lt;TreatWarningsAsErrors&gt;true&lt;/TreatWarningsAsErrors&gt;
+  &lt;AnalysisLevel&gt;latest&lt;/AnalysisLevel&gt;</pre>
+</section>
+
+<section id="legacy-props" data-part="3" data-cue="legacy/Directory.Build.props is the nearer file for legacy projects">
+  <h2>The legacy settings</h2>
+  <div class="file">legacy/Directory.Build.props</div>
+  <pre class="code tight" data-lang="xml" data-mark="7,13">&lt;PropertyGroup&gt;
+  &lt;LangVersion&gt;7.3&lt;/LangVersion&gt;
+  &lt;Nullable&gt;disable&lt;/Nullable&gt;
+  &lt;ImplicitUsings&gt;disable&lt;/ImplicitUsings&gt;
+  &lt;TreatWarningsAsErrors&gt;false&lt;/TreatWarningsAsErrors&gt;
+  &lt;AnalysisLevel&gt;none&lt;/AnalysisLevel&gt;
+  &lt;NoWarn&gt;$(NoWarn);NU1701;CS0618;CS0612;CS1591&lt;/NoWarn&gt;
+  &lt;Company&gt;FeeBilling&lt;/Company&gt;
+  &lt;Product&gt;FeeBilling&lt;/Product&gt;
+  &lt;Copyright&gt;Copyright © FeeBilling 2011-2016&lt;/Copyright&gt;
+  &lt;AssemblyVersion&gt;4.12.0.0&lt;/AssemblyVersion&gt;
+  &lt;FileVersion&gt;4.12.3.1187&lt;/FileVersion&gt;
+  &lt;AutoGenerateBindingRedirects&gt;true&lt;/AutoGenerateBindingRedirects&gt;</pre>
+  <p class="small amber">Remember NU1701. We'll come back to it.</p>
+</section>
+
+<section id="cpm" data-part="3" data-cue="Then there's Central Package Management">
+  <h2>Central Package Management</h2>
+  <div class="file">Directory.Packages.props</div>
+  <pre class="code tight" data-lang="xml" data-mark="2,6">&lt;PropertyGroup&gt;
+  &lt;ManagePackageVersionsCentrally&gt;true&lt;/ManagePackageVersionsCentrally&gt;
+&lt;/PropertyGroup&gt;
+…
+&lt;ItemGroup Label="Data"&gt;
+  &lt;PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.12" /&gt;
+  &lt;PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" /&gt;
+  &lt;PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.7" /&gt;
+&lt;/ItemGroup&gt;</pre>
+  <div class="file">src/FeeBilling.Accounts.Api/FeeBilling.Accounts.Api.csproj · no version</div>
+  <pre class="code tight" data-lang="xml">&lt;PackageReference Include="Microsoft.AspNetCore.SystemWebAdapters.CoreServices" /&gt;</pre>
+</section>
+
+<section id="transitive-pinning" data-part="3" data-cue="There's an optional extra called transitive pinning">
+  <h2>Transitive pinning</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="xml" data-mark="1">&lt;CentralPackageTransitivePinningEnabled&gt;true&lt;/CentralPackageTransitivePinningEnabled&gt;</pre>
+  <p>A central version can then override a <span class="accent">transitive</span> dependency: how you force a patched version of something you don't reference directly.</p>
+</section>
+
+<section id="legacy-opts-out" data-part="3" data-cue="Legacy opts out.">
+  <h2>Legacy opts out</h2>
+  <div class="file">legacy/Directory.Packages.props</div>
+  <pre class="code" data-lang="xml" data-mark="2,4">&lt;Project&gt;
+  &lt;!-- Legacy projects pin their own package versions (formerly packages.config). --&gt;
+  &lt;PropertyGroup&gt;
+    &lt;ManagePackageVersionsCentrally&gt;false&lt;/ManagePackageVersionsCentrally&gt;
+  &lt;/PropertyGroup&gt;
+&lt;/Project&gt;</pre>
+  <p class="muted">Reasonable for code you're trying not to change.</p>
+</section>
+
+<section id="audit-consequence" data-part="3" data-cue="Notice one consequence of the modern settings">
+  <h2>Same warning, different consequence</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Modern code</h3><p>Warnings are errors, so a NuGet audit warning <b>breaks the build</b>.</p></div>
+    <div class="card legacy"><h3 class="amber">Legacy</h3><p>Just noise in the log.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Dependency triage ───────────── -->
+<section id="triage-method" data-part="4" data-cue="Now the core of the assessment">
+  <h2>Four questions per package</h2>
+  <ol>
+    <li>Who uses it, directly or transitively?</li>
+    <li>Does it run on .NET 10, and on Linux?</li>
+    <li>Keep, upgrade, replace or remove?</li>
+    <li><b>Why?</b> <span class="muted">The column that makes the table useful months later</span></li>
+  </ol>
+</section>
+
+<section id="list-package" data-part="4" data-cue="Start the inventory with dotnet list package">
+  <h2>Start from the whole graph</h2>
+  <pre class="code" data-lang="sh">$ dotnet list legacy/FeeBilling.sln package --include-transitive</pre>
+  <div class="file">legacy/FeeBilling.Web/FeeBilling.Web.csproj</div>
+  <pre class="code tight" data-lang="xml">&lt;PackageReference Include="EntityFramework" Version="6.4.4" /&gt;
+&lt;PackageReference Include="log4net" Version="2.0.8" /&gt;
+&lt;PackageReference Include="Microsoft.AspNet.Mvc" Version="5.2.7" /&gt;
+&lt;PackageReference Include="Microsoft.AspNet.WebApi" Version="5.2.7" /&gt;
+&lt;PackageReference Include="Newtonsoft.Json" Version="11.0.2" /&gt;
+&lt;PackageReference Include="Unity" Version="5.11.1" /&gt;
+&lt;PackageReference Include="Unity.Mvc" Version="5.11.1" /&gt;
+&lt;PackageReference Include="Unity.AspNet.WebApi" Version="5.11.1" /&gt;</pre>
+</section>
+
+<template id="triage">
+  <h2>The FeeBilling triage table</h2>
+  <table>
+    <tr><th>Package</th><th>On .NET 10 and Linux?</th><th>Decision</th></tr>
+    <tr class="item"><td>EntityFramework 6.4.4</td><td>Runs (6.3+), weak EDMX story</td><td>Replace: EF Core 10 · L13</td></tr>
+    <tr class="item"><td>log4net 2.0.8</td><td>Critical + moderate advisories</td><td>Upgrade legacy now; ILogger in modern · L19</td></tr>
+    <tr class="item"><td>AspNet.Mvc / WebApi 5.2.7</td><td>No: built on System.Web</td><td>Rewrite on ASP.NET Core · L07</td></tr>
+    <tr class="item"><td>Newtonsoft.Json 11.0.2</td><td>Runs; high advisory</td><td>Bump to 13.x; System.Text.Json · L11</td></tr>
+    <tr class="item"><td>Unity (+ Mvc, WebApi) 5.11.1</td><td>Integrations System.Web-only</td><td>Replace: MS DI · L08</td></tr>
+    <tr class="item"><td>PDFsharp 1.50.5147</td><td>GDI+ build: Windows-only</td><td>Evaluate cross-platform PDF · L21</td></tr>
+    <tr class="item"><td>SystemWebAdapters.Framework… 2.3.0</td><td>Transitional bridge</td><td>Remove at decommission</td></tr>
+    <tr class="item"><td>MSTest 2.2.10</td><td>Old, irrelevant</td><td>Leave; new tests are xUnit</td></tr>
+  </table>
+</template>
+<section id="triage-0" data-part="4" data-cue="Here's the FeeBilling list." data-template="triage"></section>
+<section id="triage-1" data-part="4" data-cue="EntityFramework version 6.4.4 is used by almost everything" data-template="triage" data-highlight="1"></section>
+<section id="triage-2" data-part="4" data-cue="log4net version 2.0.8 is used by the web app" data-template="triage" data-highlight="2"></section>
+<section id="triage-3" data-part="4" data-cue="Microsoft.AspNet.Mvc and Microsoft.AspNet.WebApi, both version 5.2.7" data-template="triage" data-highlight="3"></section>
+<section id="triage-4" data-part="4" data-cue="Newtonsoft.Json version 11.0.2 runs fine on modern .NET" data-template="triage" data-highlight="4"></section>
+<section id="triage-5" data-part="4" data-cue="Unity, Unity.Mvc and Unity.AspNet.WebApi, version 5.11.1" data-template="triage" data-highlight="5"></section>
+<section id="triage-6" data-part="4" data-cue="PDFsharp version 1.50.5147, used by invoicing" data-template="triage" data-highlight="6"></section>
+<section id="triage-7" data-part="4" data-cue="Microsoft.AspNetCore.SystemWebAdapters.FrameworkServices version 2.3.0 is the Framework side" data-template="triage" data-highlight="7"></section>
+<section id="triage-8" data-part="4" data-cue="And the MSTest packages, version 2.2.10" data-template="triage" data-highlight="8"></section>
+
+<section id="nu1701" data-part="4" data-cue="Now that NU1701 warning">
+  <h2>NU1701: the signal legacy hides</h2>
+  <p>A package was restored for a framework it doesn't target, so NuGet is <span class="amber">guessing</span> it will work.</p>
+  <div class="file">legacy/Directory.Build.props</div>
+  <pre class="code" data-lang="xml" data-mark="1">&lt;NoWarn&gt;$(NoWarn);NU1701;CS0618;CS0612;CS1591&lt;/NoWarn&gt;</pre>
+  <p class="accent">In an assessment, you want that signal back.</p>
+</section>
+
+<!-- ───────────── Security and licences ───────────── -->
+<section id="audit-codes" data-part="5" data-cue="The restore is the first audit">
+  <h2>NuGet audit warnings</h2>
+  <table>
+    <tr><th>Code</th><th>Severity</th><th>FeeBilling legacy</th></tr>
+    <tr><td>NU1901</td><td>Low</td><td></td></tr>
+    <tr><td>NU1902</td><td>Moderate</td><td>log4net 2.0.8 <span class="muted small">GHSA-4f7c-pmjv-c25w</span></td></tr>
+    <tr><td>NU1903</td><td>High</td><td>Newtonsoft.Json 11.0.2 <span class="muted small">GHSA-5crp-9r3c-p9vr</span></td></tr>
+    <tr><td>NU1904</td><td><span class="red">Critical</span></td><td>log4net 2.0.8 <span class="muted small">GHSA-2cwj-8chv-9pp9</span></td></tr>
+  </table>
+</section>
+
+<section id="transitive-audit" data-part="5" data-cue="Most vulnerable code arrives transitively">
+  <h2>Audit the transitive graph</h2>
+  <div class="file">Sketch · target design (set it explicitly: defaults have changed between SDK versions)</div>
+  <pre class="code" data-lang="xml" data-mark="1">&lt;NuGetAuditMode&gt;all&lt;/NuGetAuditMode&gt;
+&lt;NuGetAuditLevel&gt;low&lt;/NuGetAuditLevel&gt;</pre>
+  <pre class="code" data-lang="sh">$ dotnet list package --vulnerable --include-transitive    # needs nuget.org access</pre>
+</section>
+
+<section id="modern-audit" data-part="5" data-cue="Run the same audit against FeeBilling.Modern.slnx">
+  <h2>New code isn't automatically clean</h2>
+  <ul>
+    <li>FeeBilling.Modern.slnx pulls its own graph: EF Core, OpenTelemetry, Testcontainers…</li>
+    <li>An advisory against any of those is your problem from day one</li>
+    <li><b>--outdated</b> shows how far behind each package is: a rough measure of upgrade effort</li>
+  </ul>
+</section>
+
+<section id="policy" data-part="5" data-cue="Then decide the policy, and write it down">
+  <h2>Write the policy down</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Modern code</h3><p>Fail the build on <b>high</b> and <b>critical</b>. Warnings as errors makes it easy.</p></div>
+    <div class="card legacy"><h3 class="amber">Legacy</h3><p>Fix <b>critical</b> findings now. It's still production.</p></div>
+  </div>
+  <p class="quote" style="margin-top:40px;font-size:40px">"We're migrating anyway" is not a reason to leave a critical advisory in production for a year.</p>
+</section>
+
+<section id="licences" data-part="5" data-cue="Licences are the other half">
+  <h2>Licences matter as much as vulnerabilities</h2>
+  <ul>
+    <li>Per the training plan, <b>MediatR</b> and <b>AutoMapper</b> moved to commercial licences in 2025 <span class="muted small">(check current terms)</span></li>
+    <li>Check the licence <span class="accent">before</span> adding a dependency</li>
+    <li>If terms change: pin the last acceptable version, or replace it</li>
+    <li>A CQRS dispatcher is about 50 lines of your own code</li>
+    <li class="muted">PDF and imaging libraries are next: lesson 21</li>
+  </ul>
+</section>
+
+<!-- ───────────── Framework-only APIs ───────────── -->
+<template id="api-groups">
+  <h2>Framework-only API inventory</h2>
+  <div class="cols3">
+    <div class="card item"><h3>Web stack · L07, 08, 10</h3><p class="small">System.Web · HttpContext.Current · HttpRuntime.Cache</p></div>
+    <div class="card item"><h3>Hosting · L15, 17</h3><p class="small">ServiceBase · ServiceContract · OperationContract</p></div>
+    <div class="card item"><h3>Data · L13, 16</h3><p class="small">TransactionScope · the EDMX · SqlDataAdapter · DataSet</p></div>
+    <div class="card item"><h3>Serialization · L18</h3><p class="small">BinaryFormatter · Encoding.Default · culture-dependent Parse</p></div>
+    <div class="card item"><h3>Platform, config · L19, 21</h3><p class="small">System.Drawing · ConfigurationManager · log4net</p></div>
+  </div>
+</template>
+<section id="api-0" data-part="6" data-cue="Packages are only half the story" data-template="api-groups"></section>
+<section id="api-1" data-part="6" data-cue="The web stack:" data-template="api-groups" data-highlight="1"></section>
+<section id="api-2" data-part="6" data-cue="Hosting: ServiceBase" data-template="api-groups" data-highlight="2"></section>
+<section id="api-3" data-part="6" data-cue="Data: TransactionScope" data-template="api-groups" data-highlight="3"></section>
+<section id="api-4" data-part="6" data-cue="Serialization and parsing:" data-template="api-groups" data-highlight="4"></section>
+<section id="api-5" data-part="6" data-cue="Platform and configuration:" data-template="api-groups" data-highlight="5"></section>
+
+<section id="api-counts" data-part="6" data-cue="Turn the grep output into counts per group">
+  <h2>Counts: your first size estimate</h2>
+  <pre class="code tight" data-lang="sh">$ git grep -n -E "System\.Web|HttpContext\.Current|HttpRuntime\.Cache" -- 'legacy/*.cs' | wc -l</pre>
+  <table>
+    <tr><th>Group</th><th>Matching lines</th><th>Files</th></tr>
+    <tr><td>Web stack</td><td>49</td><td>20</td></tr>
+    <tr><td>Platform, config</td><td>24</td><td>15</td></tr>
+    <tr><td>Serialization</td><td>8</td><td>4</td></tr>
+    <tr><td>Data</td><td>7 <span class="muted small">+ the EDMX</span></td><td>4</td></tr>
+    <tr><td>Hosting</td><td>6</td><td>3</td></tr>
+  </table>
+  <p class="small muted" style="margin-top:24px">Far more defensible in a planning meeting than a guess.</p>
+</section>
+
+<!-- ───────────── Tools ───────────── -->
+<section id="tools" data-part="7" data-cue="Finally, the tooling question">
+  <h2>The tools</h2>
+  <div class="cols">
+    <div class="card"><h3>.NET Upgrade Assistant</h3><p>Microsoft's tool for this work</p></div>
+    <div class="card"><h3>GitHub Copilot app modernization</h3><p>Where Microsoft has been steering people</p></div>
+  </div>
+  <p class="small amber" style="margin-top:32px">This changes quickly: check current status before citing either.</p>
+</section>
+
+<section id="do-dont" data-part="7" data-cue="Either way, here's what these tools do well">
+  <h2>What they do, and what they don't</h2>
+  <div class="cols">
+    <div class="card modern"><h3>They do</h3><ul><li>Convert project files to SDK-style</li><li>Change target frameworks</li><li>Update package references</li><li>Some mechanical code fixes</li></ul></div>
+    <div class="card legacy"><h3 class="amber">They don't</h3><ul><li>Choose CoreWCF vs REST</li><li>Replace MSDTC with an outbox</li><li>Decide who owns the schema</li><li>Prove the invoice matches to the cent</li></ul></div>
+  </div>
+</section>
+
+<section id="one-line" data-part="7" data-cue="The one-line version is">
+  <p class="quote">Tools do the project-file <span class="muted">grunt work</span>. People do the <span class="accent">architecture</span> and the <span class="accent">parity proof</span>.</p>
+  <p class="muted" style="margin-top:40px">In an interview, say clearly what the tool did and what you did.</p>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="8" data-cue="Here are the traps.">
+  <h2>Traps</h2>
+  <ul>
+    <li>Treating the project conversion as the migration</li>
+    <li>Losing packages.config behaviour silently</li>
+    <li>Hiding the signal: suppressing NU1701</li>
+    <li>Auditing only direct dependencies</li>
+    <li>Deferring legacy security fixes "because we're migrating"</li>
+    <li>Adding a package without checking its licence</li>
+    <li>Expecting a tool to make architecture decisions</li>
+  </ul>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="9" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="9" data-cue="How do you assess a .NET Framework codebase before migrating it?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">How do you assess a .NET Framework codebase before migrating it?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="9" data-cue="I start with a project and package inventory">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Project and package inventory</li>
+    <li>Search for Framework-only APIs, grouped by the work that fixes them</li>
+    <li>Vulnerability and licence audit, including transitive dependencies</li>
+    <li>Output: triage table, API counts, audit policy, risk register. Then a plan</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="9" data-cue="What does Upgrade Assistant, or Copilot app modernization, do and not do?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">What does Upgrade Assistant, or Copilot app modernization, do and not do?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="9" data-cue="It automates project-file conversion">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Does: project files, target frameworks, packages, mechanical fixes</li>
+    <li>Doesn't: CoreWCF vs REST, outbox vs distributed transaction, parity proof</li>
+    <li>Tools do the grunt work; people do the design</li>
+    <li>Check which tool Microsoft currently recommends</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="9" data-cue="How do you manage package versions across twenty projects?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">How do you manage package versions across twenty projects?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="9" data-cue="Central Package Management. One Directory.Packages.props">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Central Package Management: one Directory.Packages.props, versionless references</li>
+    <li>Transitive pinning to force patched transitive versions</li>
+    <li>Shared settings in Directory.Build.props</li>
+    <li>FeeBilling: modern uses both; legacy opts out with its own props files</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="9" data-cue="A package you depend on changed to a commercial licence. What do you do?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">A package you depend on changed to a commercial licence. What do you do?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="9" data-cue="First, I'd have caught it before adding the package">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Catch it before adding the package: licences checked like vulnerabilities</li>
+    <li>Pin the last acceptable version while evaluating a replacement</li>
+    <li>Replace it if the terms don't work</li>
+    <li>MediatR and AutoMapper: a CQRS dispatcher is ~50 lines</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="9" data-cue="What's the risk in converting packages.config to package references?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">What's the risk in converting packages.config to package references?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="9" data-cue="Install scripts and content transforms don't run under package references, so packages">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Install scripts and content transforms stop running, silently</li>
+    <li>Transitive dependencies go implicit: versions can shift</li>
+    <li>Binding redirects need regenerating</li>
+    <li>Diff the resolved graph and config files; the conversion isn't the migration</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">An assessment produces artifacts: triage table, API inventory, audit policy, risk register.</li>
+    <li class="item">SDK-style net472 modernizes the build, not the runtime, and can drop install scripts silently.</li>
+    <li class="item">Directory.Build.props and Central Package Management keep settings and versions consistent.</li>
+    <li class="item">Audit transitively, fix legacy's critical findings now, check licences first.</li>
+    <li class="item">Tools do the project-file grunt work; you do the architecture and prove parity.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: an assessment produces artifacts" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: SDK-style net472 makes the build modern" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: Directory.Build.props and Central Package Management" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: audit transitively" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: tools do the project-file grunt work" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="10" data-cue="In the next lesson">
+  <div class="kicker">Next</div>
+  <h1>04 · Golden-Master Characterization Testing</h1>
+  <p class="lead">Capture exactly what the legacy fee engine produces, so every later change can be proven against it.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

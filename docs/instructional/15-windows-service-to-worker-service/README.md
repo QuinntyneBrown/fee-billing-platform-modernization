@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-04 (hosting and batch processing) · **Prerequisites:** 06, 08, 13
 
-**Audio lesson:** [15-windows-service-to-worker-service.mp3](15-windows-service-to-worker-service.mp3) · [Transcript](script.md)
+**Video:** [15-windows-service-to-worker-service.mp4](15-windows-service-to-worker-service.mp4) · [Slides](slides.html) · **Audio lesson:** [15-windows-service-to-worker-service.mp3](15-windows-service-to-worker-service.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

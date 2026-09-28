@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 24 Slides</title>
+<!--
+  Slides for the lesson 24 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="24" data-lesson-title="CI Guardrails and Team Enablement" data-parts="Introduction|The questions|CI today|Banning legacy APIs|Architecture tests|The parity gate|Supply chain and delivery|Measuring progress|Enablement assets|In the interview|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 24 · the final lesson</div>
+  <h1>CI Guardrails and<br>Team Enablement</h1>
+  <p class="lead">Make the right way the easy way, and make the wrong way fail CI before code review.</p>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>How would you make other developers productive on the migration?</li>
+    <li>How do you stop people from reintroducing legacy patterns?</li>
+    <li>What goes in CI for a migration?</li>
+    <li>How do you measure migration progress?</li>
+  </ul>
+</section>
+
+<section id="principle" data-part="1" data-cue="Here's the principle that ties them together">
+  <h2>Every trap ends up in one of three places</h2>
+  <div class="cols3">
+    <div class="card modern"><h3>Impossible to write</h3><p>The template or the type system prevents it.</p></div>
+    <div class="card modern"><h3>Fails CI</h3><p>An analyzer or a test catches it.</p></div>
+    <div class="card modern"><h3>Shows up in a report</h3><p>Its trend is visible.</p></div>
+  </div>
+  <p class="amber" style="margin-top:40px">A trap that only lives in someone's head, or a review comment, will be reintroduced.</p>
+</section>
+
+<!-- ───────────── CI today ───────────── -->
+<section id="ci-jobs" data-part="2" data-cue="Open .github/workflows/ci.yml">
+  <div class="file">.github/workflows/ci.yml</div>
+  <h2>Two jobs, two operating systems</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">legacy · windows-latest</h3><p>Builds the .NET Framework solution.</p></div>
+    <div class="card modern"><h3>modern · ubuntu-latest</h3><p>Builds .NET 10; tests start a real SQL Server with Testcontainers.</p></div>
+  </div>
+</section>
+
+<section id="legacy-step" data-part="2" data-cue="Now look at the legacy test step">
+  <h2>A test job that can't fail is decoration</h2>
+  <div class="file">.github/workflows/ci.yml</div>
+  <pre class="code tight" data-lang="yaml" data-mark="3,4">- name: Test
+  run: dotnet test legacy/FeeBilling.Tests -c Release --no-build
+  # Known failures (9) and ignored tests (22). Nobody trusts this suite; it doesn't gate merges.
+  continue-on-error: true</pre>
+</section>
+
+<section id="quarantine" data-part="2" data-cue="The fix isn't to delete the suite">
+  <h2>Quarantine explicitly</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Not this</h3><p>Delete the suite, or fix all 31 problem tests before anything else.</p></div>
+    <div class="card modern"><h3>This</h3><p>Give each failing or ignored test a <span class="accent">Quarantine</span> test category, with a ticket.</p></div>
+  </div>
+</section>
+
+<section id="ignore-reasons" data-part="2" data-cue="Open legacy/FeeBilling.Tests/Core/FeeCalculatorTests.cs">
+  <h2>Why nobody trusts it</h2>
+  <div class="file">legacy/FeeBilling.Tests/Core/FeeCalculatorTests.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1,6">[TestMethod, Ignore("Needs FeeBilling database")]
+public void CalculateQuarterlyFee_TopTier()
+// …
+[TestMethod, Ignore("Needs FeeBilling database")]
+public void CalculateQuarterlyFee_ZeroAum_ChargesMinimum()
+// …
+[TestMethod, Ignore("Flaky - cache from previous test")]
+public void CalculateQuarterlyFee_AumChangedAfterCache_UsesNewAum()</pre>
+</section>
+
+<section id="gate-rest" data-part="2" data-cue="Then change the CI step to run everything except the quarantine category">
+  <h2>Gate on the trusted subset</h2>
+  <div class="file">Sketch · target design · .github/workflows/ci.yml</div>
+  <pre class="code tight" data-lang="yaml" data-mark="2">- name: Test
+  run: dotnet test legacy/FeeBilling.Tests -c Release --no-build --filter "TestCategory!=Quarantine"</pre>
+  <p>No <span class="amber">continue-on-error</span>. A small suite that's trusted and gating.</p>
+  <p class="muted">The quarantine list only shrinks; the golden master (lesson 04) supersedes most of it.</p>
+</section>
+
+<section id="build-settings" data-part="2" data-cue="Next, look at the build settings">
+  <h2>Build settings: two different worlds</h2>
+  <div class="file">Directory.Build.props (src and tests)</div>
+  <pre class="code tight" data-lang="xml" data-mark="1,2">&lt;Nullable&gt;enable&lt;/Nullable&gt;
+&lt;TreatWarningsAsErrors&gt;true&lt;/TreatWarningsAsErrors&gt;
+&lt;AnalysisLevel&gt;latest&lt;/AnalysisLevel&gt;</pre>
+  <div class="file">legacy/Directory.Build.props (doesn't inherit it)</div>
+  <pre class="code tight" data-lang="xml" data-mark="2">&lt;AnalysisLevel&gt;none&lt;/AnalysisLevel&gt;
+&lt;NoWarn&gt;$(NoWarn);NU1701;CS0618;CS0612;CS1591&lt;/NoWarn&gt;</pre>
+  <p class="small muted">CS0618 is the obsolete-API warning: invisible in legacy. The trap is letting that line reach src.</p>
+</section>
+
+<section id="missing" data-part="2" data-cue="Read the modern job critically too">
+  <h2>What the pipeline doesn't prove yet</h2>
+  <div class="cols">
+    <ul class="checks">
+      <li>Parity check</li>
+      <li>Legacy-pattern analyzer</li>
+      <li>Architecture tests</li>
+    </ul>
+    <ul class="checks">
+      <li>Dependency and licence checks</li>
+      <li>Container images</li>
+      <li>A progress report</li>
+    </ul>
+  </div>
+  <p class="muted" style="margin-top:28px">Each gap is a section of this lesson.</p>
+</section>
+
+<!-- ───────────── Banning legacy APIs ───────────── -->
+<section id="banned-api" data-part="3" data-cue="The most effective guardrail is a banned-API analyzer">
+  <h2>A banned-API analyzer</h2>
+  <ul>
+    <li>Package: <span class="accent">Microsoft.CodeAnalysis.BannedApiAnalyzers</span></li>
+    <li>A text file, <span class="accent">BannedSymbols.txt</span>, lists what new code must not use</li>
+    <li>Reports rule <span class="amber">RS0030</span> wherever they appear</li>
+    <li>TreatWarningsAsErrors is already on: a build failure</li>
+  </ul>
+</section>
+
+<section id="wire-once" data-part="3" data-cue="Add it once, for every project">
+  <h2>Add it once, for every project</h2>
+  <div class="file">Sketch · target design · Directory.Packages.props</div>
+  <pre class="code tight" data-lang="xml" data-mark="1">&lt;GlobalPackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="x.y.z" /&gt;</pre>
+  <div class="file">Sketch · target design · Directory.Build.props</div>
+  <pre class="code tight" data-lang="xml" data-mark="2">&lt;ItemGroup&gt;
+  &lt;AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.txt" /&gt;
+&lt;/ItemGroup&gt;</pre>
+  <p class="small muted">Pin the analyzer version; look it up on the day rather than copying one from a blog.</p>
+</section>
+
+<section id="the-list" data-part="3" data-cue="What goes on the list?">
+  <h2>The legacy patterns from this series</h2>
+  <div class="file">Sketch · target design · BannedSymbols.txt</div>
+  <pre class="code tight" data-lang="md">P:System.Web.HttpContext.Current;Pass what you need explicitly (lesson 08)
+T:System.Configuration.ConfigurationManager;Use the options pattern (lesson 19)
+T:System.Runtime.Serialization.Formatters.Binary.BinaryFormatter;Removed in .NET 9. Use System.Text.Json
+P:System.Text.Encoding.Default;Name the encoding explicitly
+T:System.Transactions.TransactionScope;No distributed transactions. Use the outbox (lesson 16)
+P:System.DateTime.Now;Inject TimeProvider (lesson 06)</pre>
+  <p class="small muted">Documentation comment IDs: check each against the analyzer's documentation.</p>
+</section>
+
+<section id="surprising" data-part="3" data-cue="One entry is surprising">
+  <h2>One surprising entry</h2>
+  <p>Surely <span class="accent">HttpContext.Current</span> can't compile in modern .NET?</p>
+  <p class="amber">It does, if the project references the SystemWebAdapters package.</p>
+  <p class="muted">So ban it explicitly.</p>
+</section>
+
+<section id="precise" data-part="3" data-cue="And ban precisely">
+  <h2>Ban at the overload level</h2>
+  <div class="file">Sketch · target design · BannedSymbols.txt</div>
+  <pre class="code tight" data-lang="md" data-mark="1,2,3">M:System.Math.Round(System.Decimal);Pass MidpointRounding explicitly: it's a decision
+M:System.Math.Round(System.Decimal,System.Int32);Pass MidpointRounding explicitly: it's a decision
+M:System.Math.Round(System.Double,System.Int32);Money is decimal</pre>
+  <p>Allowed: the overload with an explicit <span class="accent">MidpointRounding</span>.</p>
+  <p class="small muted">Banning Math.Round entirely would just train people to suppress the rule.</p>
+</section>
+
+<section id="messages" data-part="3" data-cue="Every entry carries a message">
+  <h2>Messages that teach</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Frustrating</h3><p>RS0030: "banned"</p></div>
+    <div class="card modern"><h3>Teaches</h3><p>RS0030: "inject TimeProvider, see the playbook section on time"</p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">Genuine exceptions: suppress with a written justification, visible in review.</p>
+</section>
+
+<!-- ───────────── Architecture tests ───────────── -->
+<section id="domain-pure" data-part="4" data-cue="The most important one keeps the domain pure">
+  <h2>Keep the domain pure</h2>
+  <div class="file">Sketch · target design · architecture test</div>
+  <pre class="code tight" data-lang="cs" data-mark="4,6">[Fact]
+public void Domain_has_no_infrastructure_references()
+{
+    string[] forbidden = ["Microsoft.EntityFrameworkCore", "Microsoft.AspNetCore", "log4net", "System.Web"];
+    var references = typeof(FeeSchedule).Assembly.GetReferencedAssemblies().Select(a => a.Name ?? "");
+    Assert.DoesNotContain(references, name => forbidden.Any(f => name.StartsWith(f, StringComparison.Ordinal)));
+}</pre>
+  <p class="small muted">No package needed. For type-level rules: NetArchTest or ArchUnitNET (check their maintenance status).</p>
+</section>
+
+<section id="more-arch" data-part="4" data-cue="Two more architecture checks come straight from earlier lessons">
+  <h2>Two more, from lesson 20</h2>
+  <div class="cols">
+    <div class="card"><h3>IgnoreQueryFilters</h3><p>Only in an allowlisted set of files. Each call bypasses tenant isolation.</p></div>
+    <div class="card"><h3>Every endpoint</h3><p>Requires authorization, and the cross-tenant test walks every endpoint automatically.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Parity gate ───────────── -->
+<section id="parity-gate" data-part="5" data-cue="The single most important check in the pipeline is parity">
+  <h2>The parity gate</h2>
+  <p><span class="accent">tests/FeeBilling.Parity.Tests</span> (work package one, not built yet)</p>
+  <p class="quote" style="margin-top:32px">A required status check. <span class="accent">No merge without it.</span></p>
+</section>
+
+<section id="codeowners" data-part="5" data-cue="But a gate is only as strong as the thing it compares against">
+  <h2>Govern the files that define correctness</h2>
+  <div class="file">Sketch · target design · .github/CODEOWNERS</div>
+  <pre class="code" data-lang="sh" data-mark="1,2">/golden/                         @feebilling/billing-domain-owners
+/tests/FeeBilling.Parity.Tests/  @feebilling/billing-domain-owners
+/docs/adr/                       @feebilling/architecture</pre>
+  <ul>
+    <li>Branch protection: parity check <b>and</b> code-owner review</li>
+    <li>Every allowlist entry links to an ADR or ticket</li>
+  </ul>
+</section>
+
+<!-- ───────────── Supply chain and delivery ───────────── -->
+<section id="nuget-audit" data-part="6" data-cue="NuGet audit reports packages with known vulnerabilities">
+  <h2>Dependencies: decide where audits block</h2>
+  <div class="file">Sketch · target design · Directory.Build.props</div>
+  <pre class="code" data-lang="xml">&lt;NuGetAudit&gt;true&lt;/NuGetAudit&gt;
+&lt;NuGetAuditMode&gt;direct&lt;/NuGetAuditMode&gt;
+&lt;NuGetAuditLevel&gt;moderate&lt;/NuGetAuditLevel&gt;</pre>
+  <p class="small"><span class="amber">Trap:</span> with TreatWarningsAsErrors, an overnight advisory turns every open PR red.</p>
+  <p class="small muted">One policy: PRs fail on vulnerable new direct dependencies; a scheduled job fails on everything and raises tickets.</p>
+</section>
+
+<section id="licences" data-part="6" data-cue="Licences are part of the supply chain too">
+  <h2>Licences are supply chain too</h2>
+  <p>MediatR and AutoMapper changed their licence terms in 2025.</p>
+  <p class="muted">As of September 2026, check the current terms.</p>
+  <p class="accent" style="margin-top:36px">A regulated vendor reviews licences when adding packages, not after an audit.</p>
+</section>
+
+<section id="containers" data-part="6" data-cue="Second, delivery">
+  <h2>Containerized by default</h2>
+  <pre class="code" data-lang="sh">dotnet publish src/FeeBilling.Accounts.Api -c Release /t:PublishContainer</pre>
+  <p class="muted">The SDK builds the image directly: no Dockerfile.</p>
+</section>
+
+<!-- ───────────── Measuring progress ───────────── -->
+<section id="measure" data-part="7" data-cue="Not by lines of code rewritten or files touched">
+  <h2>Measure risk moving out of legacy</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Not this</h3><p>Lines of code rewritten. Files touched.</p></div>
+    <div class="card modern">
+      <h3>This</h3>
+      <ul>
+        <li>Fallback route traffic → zero</li>
+        <li>Legacy API usages over time</li>
+        <li>Slices cut over</li>
+        <li>Open parity differences</li>
+        <li>Firms on the modern engine</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="burndown" data-part="7" data-cue="The legacy API count is easy to automate">
+  <h2>A burn-down on every CI run</h2>
+  <div class="file">Sketch · target design · CI step</div>
+  <pre class="code tight" data-lang="sh" data-mark="3">for pattern in 'HttpContext\.Current' 'ConfigurationManager' 'BinaryFormatter' \
+               'TransactionScope' 'System\.Drawing' 'DateTime\.Now'; do
+  count=$(git grep -c -E "$pattern" -- legacy src | awk -F: '{ s += $2 } END { print s + 0 }')
+  echo "| $pattern | $count |" &gt;&gt; "$GITHUB_STEP_SUMMARY"
+done</pre>
+  <p class="small muted">HttpContext.Current falling from dozens to zero is a chart leadership understands. A jump back up names the pull request.</p>
+</section>
+
+<!-- ───────────── Enablement assets ───────────── -->
+<section id="assets" data-part="8" data-cue="Guardrails stop the wrong thing">
+  <h2>Enablement makes the right thing easy</h2>
+  <div class="cols">
+    <ul>
+      <li>A reference vertical slice</li>
+      <li>A dotnet new template</li>
+      <li>An ADR template and decision log</li>
+      <li>A migration playbook</li>
+    </ul>
+    <ul>
+      <li>A pull request template</li>
+      <li>A pairing model</li>
+      <li>Instructions for AI assistants</li>
+      <li>One-command local setup</li>
+    </ul>
+  </div>
+</section>
+
+<section id="reference-slice" data-part="8" data-cue="A reference vertical slice. People copy what exists">
+  <h2>The reference slice: fix it first</h2>
+  <p class="small muted">src/FeeBilling.Accounts.Api is the natural seed. It ships two bugs from earlier lessons:</p>
+  <div class="file">src/FeeBilling.Accounts.Api/Accounts/AccountsEndpoints.cs · firm ID from the query string (lesson 20)</div>
+  <pre class="code tight" data-lang="cs" data-mark="2,4">private static async Task&lt;Ok&lt;List&lt;AccountDto&gt;&gt;&gt; ListAccounts(
+    int firmId,
+    // …
+        .Where(a =&gt; a.FirmId == firmId);</pre>
+  <div class="file">src/FeeBilling.Accounts.Api/Accounts/AccountDto.cs · no UTC marker (lesson 11)</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">LastValuedAt = account.LastValuedAt,</pre>
+</section>
+
+<section id="template" data-part="8" data-cue="A dotnet new template for a new FeeBilling service">
+  <h2>A dotnet new template</h2>
+  <p>Generates a new FeeBilling service already wired for:</p>
+  <ul class="checks">
+    <li>Service defaults and health checks</li>
+    <li>ProblemDetails and authentication</li>
+    <li>OpenAPI</li>
+    <li>A Testcontainers test project</li>
+  </ul>
+  <p class="accent" style="margin-top:20px">The right defaults cost nothing to adopt.</p>
+</section>
+
+<section id="adr" data-part="8" data-cue="An ADR template and a decision log">
+  <h2>An ADR template and decision log</h2>
+  <div class="file">docs/adr/0001-strangler-fig-migration.md</div>
+  <pre class="code" data-lang="md" data-mark="1,3,4,5">- **Status:** Accepted
+- **Date:** 2025-03-04
+- **Deciders:** Modernization team, Head of Engineering, Product (Billing)
+
+## Context</pre>
+  <p class="muted">Context · Decision · Consequences, plus rules for superseding. Decisions stop being re-argued in pull requests.</p>
+</section>
+
+<section id="playbook" data-part="8" data-cue="A migration playbook">
+  <h2>A per-slice playbook</h2>
+  <div class="steps">
+    <div class="step"><span class="num">1</span>Inventory</div>
+    <div class="step"><span class="num">2</span>Capture the contract</div>
+    <div class="step"><span class="num">3</span>Parity and contract tests</div>
+    <div class="step"><span class="num">4</span>Implement</div>
+    <div class="step"><span class="num">5</span>Route</div>
+    <div class="step"><span class="num">6</span>Shadow</div>
+    <div class="step"><span class="num">7</span>Cut over</div>
+    <div class="step"><span class="num">8</span>Delete the legacy path</div>
+  </div>
+  <p class="muted" style="margin-top:32px">Plus the traps list from this series. A checklist beats memory.</p>
+</section>
+
+<section id="pr-template" data-part="8" data-cue="A pull request template">
+  <h2>A pull request template</h2>
+  <div class="file">Sketch · target design · .github/pull_request_template.md</div>
+  <pre class="code" data-lang="md">- [ ] Contract captured and contract tests added
+- [ ] Parity report attached (link)
+- [ ] Route added; rollback exercised
+- [ ] Legacy path deleted, or frozen with a removal date</pre>
+  <p class="muted">Review becomes verification instead of archaeology.</p>
+</section>
+
+<section id="pairing" data-part="8" data-cue="A pairing model">
+  <h2>Pairing that scales you out</h2>
+  <div class="timeline">
+    <div class="card modern"><h3>First slice</h3><p>Pair on it.</p></div>
+    <div class="card"><h3>Second slice</h3><p>Review it.</p></div>
+    <div class="card"><h3>After that</h3><p>Spot-check.</p></div>
+  </div>
+  <p class="amber" style="margin-top:36px">If every slice needs your personal review, you've become the bottleneck.</p>
+</section>
+
+<section id="ai-assistants" data-part="8" data-cue="And instructions for AI coding assistants">
+  <h2>AI assistants follow the same guardrails</h2>
+  <p>The playbook's rules, placed where the assistants read them.</p>
+  <p class="muted">In this repository, <span class="accent">AGENTS.md</span> is generated: change the generator's input, not the file.</p>
+</section>
+
+<section id="local-setup" data-part="8" data-cue="Even local setup is part of this">
+  <h2>The right way starts on day one</h2>
+  <pre class="code" data-lang="sh">docker compose up -d
+dotnet run --project tools/FeeBilling.DbInit</pre>
+  <p class="muted">tools/FeeBilling.DbInit creates and seeds the databases with one command.</p>
+</section>
+
+<!-- ───────────── In the interview ───────────── -->
+<section id="walkthrough-minute" data-part="9" data-cue="The training plan's ten-minute project walkthrough">
+  <h2>The last minute of the walkthrough</h2>
+  <p>Section 12.1 ends with <span class="accent">one minute on enablement</span>.</p>
+  <p class="muted">Don't fall back on "I'd document things". Name <b>three concrete assets</b> and <b>one guardrail</b>, each with a reason.</p>
+</section>
+
+<section id="example-answer" data-part="9" data-cue="I'd fix Accounts API first and make it the reference slice">
+  <h2>Three assets, one guardrail</h2>
+  <ul>
+    <li>Fix Accounts API first and make it the reference slice: <span class="muted">whatever exists gets copied</span></li>
+    <li>A service template: <span class="muted">health checks, telemetry, auth, Testcontainers from day one</span></li>
+    <li>An ADR log: <span class="muted">decisions don't get re-argued in pull requests</span></li>
+    <li>A banned-API analyzer with teaching messages: <span class="muted">the traps fail the build</span></li>
+  </ul>
+</section>
+
+<section id="scale-yourself" data-part="9" data-cue="Then close with how you'd scale yourself">
+  <div class="kicker">Close with</div>
+  <p class="quote">Pair on each developer's first slice, review the second, and <span class="accent">step back</span>.</p>
+  <p class="muted" style="margin-top:48px">You think about the team, not just the code: that's what the SME part of the role is testing.</p>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="10" data-cue="continue-on-error as a permanent state">
+  <h2>Traps</h2>
+  <ul class="small">
+    <li>continue-on-error as a permanent state</li>
+    <li>Banning too broadly, which trains people to suppress rules</li>
+    <li>Silenced warnings spreading from legacy into new code</li>
+    <li>A reference implementation with bugs, copied everywhere</li>
+    <li>Vulnerability audits failing unrelated pull requests</li>
+    <li>Golden files anyone can regenerate without review</li>
+    <li>Measuring lines of code instead of traffic and legacy APIs</li>
+    <li>The subject-matter expert as a bottleneck</li>
+  </ul>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="11" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Four questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="11" data-cue="How would you make other developers productive on the migration?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 4</div>
+  <p class="question">How would you make other developers productive on the migration?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="11" data-cue="Make the right way the easy way. A reference vertical slice">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>A reference vertical slice, known bugs fixed first</li>
+    <li>A template for new services, already wired</li>
+    <li>An ADR log; a playbook with the per-slice checklist and traps</li>
+    <li>Pair on the first slice, review the second, step back</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="11" data-cue="How do you stop people from reintroducing legacy patterns?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 4</div>
+  <p class="question">How do you stop people from reintroducing legacy patterns?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="11" data-cue="Automation, not review comments">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Banned-API analyzer, messages that say what to use instead</li>
+    <li>Ban at the overload level (rounding without a midpoint mode)</li>
+    <li>Architecture tests; a parity gate; code owners on correctness files</li>
+    <li>Exceptions need a written justification, visible in review</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="11" data-cue="What goes in CI for a migration?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 4</div>
+  <p class="question">What goes in CI for a migration?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="11" data-cue="Both stacks building, each on the right operating system">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Both stacks building; modern tests on real infrastructure</li>
+    <li>A gating legacy subset; the rest quarantined</li>
+    <li>Required parity check; golden files under code-owner review</li>
+    <li>Analyzers, architecture tests, dependency and licence checks, a burn-down report</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="11" data-cue="How do you measure migration progress?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 4</div>
+  <p class="question">How do you measure migration progress?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="11" data-cue="Not percent of code rewritten">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Fallback-route traffic trending to zero</li>
+    <li>Legacy API usages over time</li>
+    <li>Slices cut over; open parity differences</li>
+    <li>Firms billed by the modern engine</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Every trap is impossible to write, fails CI, or shows up in a report.</li>
+    <li class="item">Quarantine explicitly and gate on the rest.</li>
+    <li class="item">Ban legacy APIs precisely, with teaching messages; parity gate plus code owners.</li>
+    <li class="item">Measure risk moved: fallback traffic, legacy API counts, slices and firms.</li>
+    <li class="item">Correct reference slice, template, ADR log, playbook, pairing that scales you out.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="12" data-cue="Five things to remember" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="12" data-cue="One: every trap should be impossible to write" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="12" data-cue="Two: turn an untrusted suite into a trusted one" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="12" data-cue="Three: ban legacy APIs precisely" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="12" data-cue="Four: measure progress by risk moved" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="12" data-cue="Five: enablement means a correct reference slice" data-template="recap" data-show="5"></section>
+
+<section id="series-end" data-part="12" data-cue="That's the end of the series">
+  <div class="kicker">End of the series · your last step</div>
+  <h2>Rehearse the 10-minute walkthrough, out loud</h2>
+  <div class="steps">
+    <div class="step"><span class="num">1</span>Context<span class="tag">1 min</span></div>
+    <div class="step"><span class="num">2</span>Parity before code<span class="tag">2 min</span></div>
+    <div class="step"><span class="num">3</span>Fee engine<span class="tag">2 min</span></div>
+    <div class="step"><span class="num">4</span>Billing worker<span class="tag">2 min</span></div>
+    <div class="step"><span class="num">5</span>The silent killers<span class="tag">1 min</span></div>
+    <div class="step"><span class="num">6</span>Cutover<span class="tag">1 min</span></div>
+    <div class="step on"><span class="num">7</span>Enablement<span class="tag">1 min</span></div>
+  </div>
+  <p class="muted small" style="margin-top:28px">Training plan, section 12.1: from the golden master to enablement, in ten minutes.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

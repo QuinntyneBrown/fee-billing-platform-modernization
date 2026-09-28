@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work packages:** WP-02, WP-04 (and every WP that touches `FeeBilling.Core`) · **Prerequisites:** 06, 07
 
-**Audio lesson:** [08-dependency-injection-and-ambient-state.mp3](08-dependency-injection-and-ambient-state.mp3) · [Transcript](script.md)
+**Video:** [08-dependency-injection-and-ambient-state.mp4](08-dependency-injection-and-ambient-state.mp4) · [Slides](slides.html) · **Audio lesson:** [08-dependency-injection-and-ambient-state.mp3](08-dependency-injection-and-ambient-state.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

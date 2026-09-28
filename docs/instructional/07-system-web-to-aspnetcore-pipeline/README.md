@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-03 · **Prerequisites:** 01, 02
 
-**Audio lesson:** [07-system-web-to-aspnetcore-pipeline.mp3](07-system-web-to-aspnetcore-pipeline.mp3) · [Transcript](script.md)
+**Video:** [07-system-web-to-aspnetcore-pipeline.mp4](07-system-web-to-aspnetcore-pipeline.mp4) · [Slides](slides.html) · **Audio lesson:** [07-system-web-to-aspnetcore-pipeline.mp3](07-system-web-to-aspnetcore-pipeline.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

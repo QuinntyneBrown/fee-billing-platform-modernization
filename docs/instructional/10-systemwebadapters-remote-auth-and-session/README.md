@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work packages:** WP-08 (transition auth), context for WP-03 · **Prerequisites:** 07, 09
 
-**Audio lesson:** [10-systemwebadapters-remote-auth-and-session.mp3](10-systemwebadapters-remote-auth-and-session.mp3) · [Transcript](script.md)
+**Video:** [10-systemwebadapters-remote-auth-and-session.mp4](10-systemwebadapters-remote-auth-and-session.mp4) · [Slides](slides.html) · **Audio lesson:** [10-systemwebadapters-remote-auth-and-session.mp3](10-systemwebadapters-remote-auth-and-session.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

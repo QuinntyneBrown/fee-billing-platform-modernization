@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work packages:** prerequisite for all · **Prerequisites:** 01, 02
 
-**Audio lesson:** [03-project-system-and-dependency-assessment.mp3](03-project-system-and-dependency-assessment.mp3) · [Transcript](script.md)
+**Video:** [03-project-system-and-dependency-assessment.mp4](03-project-system-and-dependency-assessment.mp4) · [Slides](slides.html) · **Audio lesson:** [03-project-system-and-dependency-assessment.mp3](03-project-system-and-dependency-assessment.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

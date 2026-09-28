@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-06 · **Prerequisites:** 08, 11
 
-**Audio lesson:** [13-ef6-to-ef-core.mp3](13-ef6-to-ef-core.mp3) · [Transcript](script.md)
+**Video:** [13-ef6-to-ef-core.mp4](13-ef6-to-ef-core.mp4) · [Slides](slides.html) · **Audio lesson:** [13-ef6-to-ef-core.mp3](13-ef6-to-ef-core.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

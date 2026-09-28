@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-03 · **Prerequisites:** 07, 09, 11
 
-**Audio lesson:** [12-billing-api-idempotency-and-streaming.mp3](12-billing-api-idempotency-and-streaming.mp3) · [Transcript](script.md)
+**Video:** [12-billing-api-idempotency-and-streaming.mp4](12-billing-api-idempotency-and-streaming.mp4) · [Slides](slides.html) · **Audio lesson:** [12-billing-api-idempotency-and-streaming.mp3](12-billing-api-idempotency-and-streaming.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-10 · **Prerequisites:** 01, 04, 05, 15, 16
 
-**Audio lesson:** [23-cutover-shadow-runs-and-decommission.mp3](23-cutover-shadow-runs-and-decommission.mp3) · [Transcript](script.md)
+**Video:** [23-cutover-shadow-runs-and-decommission.mp4](23-cutover-shadow-runs-and-decommission.mp4) · [Slides](slides.html) · **Audio lesson:** [23-cutover-shadow-runs-and-decommission.mp3](23-cutover-shadow-runs-and-decommission.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

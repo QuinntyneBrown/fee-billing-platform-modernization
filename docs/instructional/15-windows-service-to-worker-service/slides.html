@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 15 Slides</title>
+<!--
+  Slides for the lesson 15 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="15" data-lesson-title="Windows Service to Worker Service" data-parts="Introduction|The questions|The legacy runner|Hidden bugs|Worker Service host|Atomic claiming|Chunks and parallelism|Resumability|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 15</div>
+  <h1>Windows Service to<br>Worker Service</h1>
+  <p class="lead">Claim safely, process in chunks, stop gracefully, resume without double-billing</p>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>How would you replace a Windows Service in modern .NET?</li>
+    <li>Design a resumable batch job.</li>
+    <li>How do you use a DbContext in parallel?</li>
+    <li>How do you stop two instances from processing the same work?</li>
+    <li>What happens to in-flight work during a deploy?</li>
+  </ul>
+</section>
+
+<section id="porting-trap" data-part="1" data-cue="The trap in all of these is porting the timer">
+  <div class="kicker">The trap</div>
+  <p class="quote">Porting the timer gets you <span class="accent">a modern host</span> with <span class="amber">the same bugs</span>.</p>
+  <p class="muted" style="margin-top:48px">Redesign the job so it can be claimed safely, processed in parallel, stopped and resumed.</p>
+</section>
+
+<!-- ───────────── Legacy runner ───────────── -->
+<section id="onstart" data-part="2" data-cue="Open legacy/FeeBilling.BillingRunner/BillingRunnerService.cs">
+  <h2>A ServiceBase with a timer</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/BillingRunnerService.cs</div>
+  <pre class="code" data-lang="cs" data-mark="3,5,6">protected override void OnStart(string[] args)
+{
+    HttpContext.Current = FakeHttpContext.Create();   // so FeeCalculator works outside IIS
+    _fakeContext = HttpContext.Current;
+    _timer = new Timer(30_000);
+    _timer.Elapsed += (s, e) => ProcessQueue();
+    _timer.Start();
+    Log.Info("BillingRunner started");
+}</pre>
+</section>
+
+<section id="dbcontextfactory" data-part="2" data-cue="Why the fake HTTP context?">
+  <h2>Why fake an HTTP context?</h2>
+  <div class="file">legacy/FeeBilling.Data/DbContextFactory.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="5">public static FeeBillingEntities Current
+{
+    get
+    {
+        var items = HttpContext.Current.Items;
+        var db = items[ItemsKey] as FeeBillingEntities;
+        if (db == null)
+        {
+            db = new FeeBillingEntities();
+            items[ItemsKey] = db;
+        }
+        return db;
+    }
+}</pre>
+  <p class="small muted">One context per request. Outside IIS there's no request, so the runner invents one.</p>
+</section>
+
+<section id="period-detail" data-part="2" data-cue="The rest of the project is period detail">
+  <h2>Period detail</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/Program.cs</div>
+  <pre class="code tight" data-lang="cs">// Debugging aid: FeeBilling.BillingRunner.exe --console
+if (Environment.UserInteractive &amp;&amp; args.Length > 0 &amp;&amp; args[0] == "--console")</pre>
+  <div class="file">legacy/FeeBilling.BillingRunner/ProjectInstaller.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="3">// installutil.exe FeeBilling.BillingRunner.exe
+// …
+// Runs as the FEEBILLING\svc-billing domain account (MSDTC needs network access).
+Account = ServiceAccount.User</pre>
+</section>
+
+<section id="processqueue" data-part="2" data-cue="Now ProcessQueue">
+  <h2>ProcessQueue</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/BillingRunnerService.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,5,7,15">var run = _db.BillingRunQueue.FirstOrDefault(r => r.Status == "Pending");
+if (run == null) return;
+// …
+var accounts = _db.Accounts.Where(a => a.FirmId == run.FirmId).ToList();
+using (var scope = new TransactionScope())          // Billing DB + Reporting DB → MSDTC
+{
+    Parallel.ForEach(accounts.Where(…), acct =>   // shared DbContext across threads
+    {
+        // …
+    });
+    _db.SaveChanges();
+    _reportingDb.SaveChanges();
+    scope.Complete();
+}
+run.Status = "Complete";   // crash at account 40,000 = whole run rolls back, starts over</pre>
+</section>
+
+<section id="optimistic" data-part="2" data-cue="That comment is honest, but it's optimistic">
+  <h2>Honest, but optimistic</h2>
+  <p>What's actually wrong doesn't show up in the MSTest suite.</p>
+</section>
+
+<!-- ───────────── Hidden bugs ───────────── -->
+<template id="bugs">
+  <h2>The bugs the comments don't mention</h2>
+  <div class="steps">
+    <div class="step item"><span class="num">1</span>Overlapping ticks: 30 s timer, no reentrancy guard</div>
+    <div class="step item"><span class="num">2</span>No claim: never marked Running, no ordering</div>
+    <div class="step item"><span class="num">3</span>No failure handling: retried every 30 s, forever</div>
+    <div class="step item"><span class="num">4</span>Contexts live as long as the service</div>
+    <div class="step item"><span class="num">5</span>One DbContext shared across threads</div>
+    <div class="step item"><span class="num">6</span>Crash after commit: the firm is billed again</div>
+  </div>
+</template>
+<section id="bug-1" data-part="3" data-cue="First, overlap" data-template="bugs" data-highlight="1"></section>
+<section id="bug-2" data-part="3" data-cue="Second, claiming" data-template="bugs" data-highlight="2"></section>
+
+<section id="pending-proc" data-part="3" data-cue="There's a stored procedure, usp_GetPendingBillingRun">
+  <h2>The ordered version exists, unused</h2>
+  <div class="file">database/billing/002-stored-procedures.sql</div>
+  <pre class="code tight" data-lang="sql" data-mark="1,10">-- 4. Next pending run. (BillingRunner uses a LINQ query instead; kept "just in case".)
+-------------------------------------------------------------------------------
+CREATE PROCEDURE dbo.usp_GetPendingBillingRun
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT TOP (1) Id, FirmId, PeriodEnd, Status, RequestedBy, RequestedOn
+    FROM dbo.BillingRunQueue
+    WHERE Status = 'Pending'
+    ORDER BY RequestedOn;
+END</pre>
+</section>
+
+<section id="bug-3" data-part="3" data-cue="Third, failure handling" data-template="bugs" data-highlight="3"></section>
+
+<section id="context-fields" data-part="3" data-cue="Fourth, context lifetime">
+  <div class="kicker">Bug 4 of 6</div>
+  <h2>Contexts that live forever</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/BillingRunnerService.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,2">private readonly FeeBillingEntities _db = new FeeBillingEntities();
+private readonly ReportingEntities _reportingDb = new ReportingEntities();</pre>
+  <p>The change tracker grows run after run, and tracked entities can return <span class="amber">stale values</span>.</p>
+</section>
+
+
+<section id="fb-402" data-part="3" data-cue="Fifth, the shared context">
+  <div class="kicker">Bug 5 of 6</div>
+  <h2>FB-402: the symptom fixed, not the cause</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/BillingRunnerService.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="3">Parallel.ForEach(accounts.Where(…), acct =>   // shared DbContext across threads
+{
+    HttpContext.Current = _fakeContext;   // FB-402: pool threads have no HttpContext either</pre>
+  <p>Every thread's DbContextFactory.Current returns <span class="amber">the same FeeBillingEntities</span>. The fee calculators run concurrently against one context.</p>
+</section>
+
+
+<section id="double-bill" data-part="3" data-cue="And sixth, the one that matters most">
+  <div class="kicker">Bug 6 of 6</div>
+  <h2>In the wrong millisecond, a crash double-bills</h2>
+  <svg width="1640" height="330" viewBox="0 0 1640 330">
+    <defs><marker id="arrow15a" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="60" width="350" height="150" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="175" y="125" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">scope.Complete()</text>
+    <text x="175" y="165" fill="#8ea2c0" font-size="24" text-anchor="middle">invoices committed</text>
+    <line x1="355" y1="135" x2="415" y2="135" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow15a)"/>
+    <rect x="425" y="60" width="350" height="150" rx="18" fill="#2a1414" stroke="#f87171" stroke-width="3"/>
+    <text x="600" y="125" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">Process dies</text>
+    <text x="600" y="165" fill="#8ea2c0" font-size="24" text-anchor="middle">before the final save</text>
+    <line x1="780" y1="135" x2="840" y2="135" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow15a)"/>
+    <rect x="850" y="60" width="350" height="150" rx="18" fill="#221b0d" stroke="#f5b544" stroke-width="3"/>
+    <text x="1025" y="125" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">Run still Pending</text>
+    <text x="1025" y="165" fill="#8ea2c0" font-size="24" text-anchor="middle">status never saved</text>
+    <line x1="1205" y1="135" x2="1265" y2="135" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow15a)"/>
+    <rect x="1275" y="60" width="365" height="150" rx="18" fill="#2a1414" stroke="#f87171" stroke-width="3"/>
+    <text x="1457" y="125" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">Next tick</text>
+    <text x="1457" y="165" fill="#8ea2c0" font-size="24" text-anchor="middle">bills the firm again</text>
+    <text x="820" y="290" fill="#f5b544" font-size="28" text-anchor="middle">dbo.Invoices has no unique key across RunId and AccountId, so nothing stops it</text>
+  </svg>
+</section>
+
+<section id="datetime-now" data-part="3" data-cue="A small one to finish">
+  <h2>And a small one</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/BillingRunnerService.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1,2">run.CompletedOn = DateTime.Now;
+LoadedOn = DateTime.Now</pre>
+  <p class="muted">Local server time, written into CompletedOn and the reporting table's LoadedOn.</p>
+</section>
+
+<!-- ───────────── Worker Service host ───────────── -->
+<section id="worker-host" data-part="4" data-cue="Now the replacement. In modern .NET">
+  <h2>A Worker Service</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,2,7">var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddHostedService&lt;BillingWorker&gt;();
+builder.Build().Run();
+
+public sealed class BillingWorker : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        // …
+    }
+}</pre>
+</section>
+
+<section id="worker-gets" data-part="4" data-cue="You get the same things an ASP.NET Core app gets">
+  <h2>What the host gives you</h2>
+  <ul class="checks">
+    <li>Dependency injection</li>
+    <li>Configuration and the options pattern</li>
+    <li>ILogger</li>
+    <li>Managed startup and shutdown</li>
+  </ul>
+  <pre class="code" data-lang="sh" style="margin-top:28px">dotnet new worker</pre>
+</section>
+
+<section id="windows-service" data-part="4" data-cue="Does it still run as a Windows Service?">
+  <h2>Still a Windows Service, if you need one</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">builder.Services.AddWindowsService(options => options.ServiceName = "FeeBilling.BillingRunner");</pre>
+  <div class="cols3">
+    <div class="card"><h3>Started by the SCM</h3><p>Integrates with the Service Control Manager.</p></div>
+    <div class="card"><h3>Anything else</h3><p>The call does nothing.</p></div>
+    <div class="card modern"><h3>One binary</h3><p>Console, container, or service.</p></div>
+  </div>
+</section>
+
+<section id="periodic-timer" data-part="4" data-cue="Replace the timer with PeriodicTimer">
+  <h2>PeriodicTimer: ticks can't overlap</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="cs" data-mark="3,6,8">protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+{
+    using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30), timeProvider);
+    do
+    {
+        await ProcessNextRunAsync(stoppingToken);
+    }
+    while (await timer.WaitForNextTickAsync(stoppingToken));
+}</pre>
+  <p class="small muted">The next wait only starts after the work finishes. TimeProvider is injected so tests control time.</p>
+</section>
+
+<section id="shutdown" data-part="4" data-cue="Graceful shutdown works through the stopping token">
+  <h2>Graceful shutdown</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs">builder.Services.Configure&lt;HostOptions&gt;(options => options.ShutdownTimeout = TimeSpan.FromMinutes(2));</pre>
+  <ul>
+    <li>Stop signals the token; running work gets <span class="accent">ShutdownTimeout</span> to finish</li>
+    <li>The default is short <span class="muted small">(30 seconds in recent versions)</span>: configure it</li>
+    <li>The orchestrator's grace period must be at least as long</li>
+    <li>An unhandled exception in a BackgroundService now <span class="amber">stops the host</span></li>
+  </ul>
+</section>
+
+<section id="not-fixed" data-part="4" data-cue="But notice what PeriodicTimer doesn't fix">
+  <div class="cols">
+    <div class="card modern"><h3>PeriodicTimer fixes</h3><p>Overlap within <b>one process</b>.</p></div>
+    <div class="card legacy"><h3 class="amber">It doesn't fix</h3><p><b>Two instances</b> picking the same run.</p></div>
+  </div>
+  <p class="accent" style="margin-top:48px">Only an atomic claim does.</p>
+</section>
+
+<!-- ───────────── Atomic claiming ───────────── -->
+<section id="claim-race" data-part="5" data-cue="To claim work safely">
+  <h2>Never select, then update</h2>
+  <svg width="1640" height="400" viewBox="0 0 1640 400">
+    <defs><marker id="arrow15b" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <text x="0" y="70" fill="#38bdf8" font-size="30" font-weight="600">Instance A</text>
+    <text x="0" y="300" fill="#f5b544" font-size="30" font-weight="600">Instance B</text>
+    <rect x="260" y="30" width="400" height="70" rx="14" fill="#121b2f" stroke="#38bdf8" stroke-width="2"/>
+    <text x="460" y="75" fill="#e8eef8" font-size="26" text-anchor="middle">SELECT … WHERE Pending</text>
+    <rect x="260" y="260" width="400" height="70" rx="14" fill="#121b2f" stroke="#f5b544" stroke-width="2"/>
+    <text x="460" y="305" fill="#e8eef8" font-size="26" text-anchor="middle">SELECT … WHERE Pending</text>
+    <line x1="665" y1="65" x2="775" y2="65" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow15b)"/>
+    <line x1="665" y1="295" x2="775" y2="295" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow15b)"/>
+    <rect x="785" y="30" width="400" height="70" rx="14" fill="#121b2f" stroke="#38bdf8" stroke-width="2"/>
+    <text x="985" y="75" fill="#e8eef8" font-size="26" text-anchor="middle">UPDATE … Running</text>
+    <rect x="785" y="260" width="400" height="70" rx="14" fill="#121b2f" stroke="#f5b544" stroke-width="2"/>
+    <text x="985" y="305" fill="#e8eef8" font-size="26" text-anchor="middle">UPDATE … Running</text>
+    <rect x="1290" y="130" width="350" height="100" rx="18" fill="#2a1414" stroke="#f87171" stroke-width="3"/>
+    <text x="1465" y="175" fill="#e8eef8" font-size="28" font-weight="600" text-anchor="middle">Both run it</text>
+    <text x="1465" y="210" fill="#8ea2c0" font-size="22" text-anchor="middle">same run, twice</text>
+    <path d="M1190,65 C1240,65 1240,160 1285,170" fill="none" stroke="#8ea2c0" stroke-width="3" marker-end="url(#arrow15b)"/>
+    <path d="M1190,295 C1240,295 1240,200 1285,195" fill="none" stroke="#8ea2c0" stroke-width="3" marker-end="url(#arrow15b)"/>
+    <text x="460" y="180" fill="#8ea2c0" font-size="24" text-anchor="middle">both see the same row before either updates</text>
+  </svg>
+</section>
+
+<section id="claim-sql" data-part="5" data-cue="In SQL Server, the standard pattern is a single UPDATE">
+  <h2>One atomic statement</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="sql" data-mark="3,9">WITH next AS (
+    SELECT TOP (1) *
+    FROM dbo.BillingRunQueue WITH (ROWLOCK, UPDLOCK, READPAST)
+    WHERE Status = 'Pending'
+    ORDER BY RequestedOn
+)
+UPDATE next
+SET Status = 'Running', StartedOn = SYSUTCDATETIME()
+OUTPUT inserted.Id, inserted.FirmId, inserted.PeriodEnd;</pre>
+  <p class="small"><span class="accent">UPDLOCK</span> locks the row it reads · <span class="accent">READPAST</span> makes other sessions skip locked rows. A second window gets the next run, not the same one.</p>
+</section>
+
+<section id="claim-alt" data-part="5" data-cue="An alternative is a conditional status transition">
+  <h2>Or: a conditional transition</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="2,5">var claimed = await db.BillingRuns
+    .Where(r => r.Id == runId &amp;&amp; r.Status == "Pending")
+    .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "Running"), ct);
+
+if (claimed != 1) return;   // someone else got it</pre>
+  <p class="muted small">A row version column gives the same guarantee with optimistic concurrency.</p>
+</section>
+
+<section id="rcsi" data-part="5" data-cue="Why stress this? Because select-then-update is worse than it looks">
+  <h2>Worse than it looks</h2>
+  <p>Under <span class="accent">read committed snapshot isolation</span>, on by default in Azure SQL Database, readers don't block on writers.</p>
+  <p class="amber">Both instances read Pending. Both proceed.</p>
+</section>
+
+<section id="lease" data-part="5" data-cue="One more piece: claims need an expiry">
+  <h2>Claims need an expiry</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Without one</h3><p>A worker that dies after claiming leaves its run Running forever.</p></div>
+    <div class="card modern"><h3>A lease</h3><p>A claimed-until time extended by a heartbeat, so another instance can reclaim abandoned work.</p></div>
+  </div>
+  <p class="muted small" style="margin-top:32px">Or, once messaging arrives (lesson 16), let message redelivery drive the retry.</p>
+</section>
+
+<!-- ───────────── Chunks and parallelism ───────────── -->
+<section id="persist-plan" data-part="6" data-cue="Now the batch itself">
+  <div class="kicker">The core idea</div>
+  <p class="quote">Persist the plan <span class="accent">before</span> you process it.</p>
+</section>
+
+<section id="chunk-table" data-part="6" data-cue="When a run starts, split the firm's billing units into chunks">
+  <h2>A chunk table</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="sql" data-mark="7">CREATE TABLE dbo.BillingRunChunks
+(
+    RunId        int          NOT NULL,
+    ChunkNo      int          NOT NULL,
+    Status       varchar(20)  NOT NULL,   -- Pending | Complete
+    CompletedOn  datetime2    NULL,
+    CONSTRAINT PK_BillingRunChunks PRIMARY KEY (RunId, ChunkNo)
+);</pre>
+  <p class="small">Chunks of ~500 billing units. Membership is <span class="amber">decided once and stored</span>: recompute it after a restart and accounts move between completed and pending chunks.</p>
+</section>
+
+<section id="billing-unit" data-part="6" data-cue="What's a billing unit?">
+  <h2>Chunk by billing unit, not by account</h2>
+  <div class="cols">
+    <div class="card"><h3>An account</h3><p>With its own fee schedule.</p></div>
+    <div class="card"><h3>A whole household</h3><p>The household fee needs every member's AUM, then allocates back.</p></div>
+  </div>
+  <p class="amber" style="margin-top:40px">Chunk by account and household members land in different chunks.</p>
+</section>
+
+<section id="context-per-chunk" data-part="6" data-cue="Each chunk then runs in its own local transaction">
+  <h2>One short-lived context per chunk</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="4">builder.Services.AddDbContextFactory&lt;BillingDbContext&gt;(o => o.UseSqlServer(connectionString));
+
+// IDbContextFactory&lt;BillingDbContext&gt; dbFactory, injected
+await using var db = await dbFactory.CreateDbContextAsync(ct);</pre>
+  <div class="card legacy" style="margin-top:8px"><p class="small">InvalidOperationException: <span class="amber">A second operation was started on this context instance before a previous operation completed.</span></p></div>
+  <p class="small muted" style="margin-top:24px">Don't blame EF Core. It's reporting a bug the legacy code always had.</p>
+</section>
+
+<section id="parallel" data-part="6" data-cue="For parallelism, use Parallel.ForEachAsync">
+  <h2>Bounded parallelism</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">var options = new ParallelOptions { MaxDegreeOfParallelism = billing.MaxParallelChunks, CancellationToken = ct };
+
+await Parallel.ForEachAsync(pendingChunks, options, async (chunk, token) =>
+{
+    await ProcessChunkAsync(run, chunk, token);
+});</pre>
+  <p class="small muted">The limit comes from configuration and protects the database from being flooded.</p>
+</section>
+
+<section id="inside-chunk" data-part="6" data-cue="Inside each chunk: load the inputs set-based">
+  <h2>Inside each chunk</h2>
+  <ol>
+    <li>Load inputs <span class="accent">set-based</span>: a few queries per chunk, not per account</li>
+    <li>Run the pure fee engine</li>
+    <li>Add the invoices and save</li>
+    <li>Mark the chunk Complete with ExecuteUpdateAsync</li>
+    <li>Commit</li>
+  </ol>
+  <p class="accent" style="margin-top:24px">Invoices and the "chunk done" marker commit together. That's the heart of resumability.</p>
+</section>
+
+<section id="execution-strategy" data-part="6" data-cue="There's one EF Core detail that trips people up">
+  <h2>Retry-on-failure needs an execution strategy</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,4">var strategy = db.Database.CreateExecutionStrategy();
+await strategy.ExecuteAsync(async () =>
+{
+    db.ChangeTracker.Clear();                         // the lambda may run more than once
+    await using var tx = await db.Database.BeginTransactionAsync(ct);
+    db.Invoices.AddRange(invoices);
+    await db.SaveChangesAsync(ct);
+    await db.Chunks.Where(c => c.RunId == run.Id &amp;&amp; c.ChunkNo == chunk.No)
+        .ExecuteUpdateAsync(s => s.SetProperty(c => c.Status, "Complete"), ct);
+    await tx.CommitAsync(ct);
+});</pre>
+</section>
+
+<!-- ───────────── Resumability ───────────── -->
+<section id="kill" data-part="7" data-cue="Now kill the process in the middle of a run">
+  <h2>Kill it mid-run</h2>
+  <svg width="1640" height="330" viewBox="0 0 1640 330">
+    <g font-size="26" text-anchor="middle">
+      <rect x="0" y="40" width="150" height="110" rx="14" fill="#10281c" stroke="#4ade80" stroke-width="3"/><text x="75" y="105" fill="#e8eef8">1 ✓</text>
+      <rect x="165" y="40" width="150" height="110" rx="14" fill="#10281c" stroke="#4ade80" stroke-width="3"/><text x="240" y="105" fill="#e8eef8">2 ✓</text>
+      <rect x="330" y="40" width="150" height="110" rx="14" fill="#10281c" stroke="#4ade80" stroke-width="3"/><text x="405" y="105" fill="#e8eef8">3 ✓</text>
+      <rect x="495" y="40" width="150" height="110" rx="14" fill="#10281c" stroke="#4ade80" stroke-width="3"/><text x="570" y="105" fill="#e8eef8">4 ✓</text>
+      <rect x="660" y="40" width="150" height="110" rx="14" fill="#221b0d" stroke="#f5b544" stroke-width="3"/><text x="735" y="105" fill="#e8eef8">5</text>
+      <rect x="825" y="40" width="150" height="110" rx="14" fill="#121b2f" stroke="#22304d" stroke-width="2"/><text x="900" y="105" fill="#8ea2c0">6</text>
+      <rect x="990" y="40" width="150" height="110" rx="14" fill="#121b2f" stroke="#22304d" stroke-width="2"/><text x="1065" y="105" fill="#8ea2c0">7</text>
+      <rect x="1155" y="40" width="150" height="110" rx="14" fill="#121b2f" stroke="#22304d" stroke-width="2"/><text x="1230" y="105" fill="#8ea2c0">8</text>
+      <rect x="1320" y="40" width="150" height="110" rx="14" fill="#121b2f" stroke="#22304d" stroke-width="2"/><text x="1395" y="105" fill="#8ea2c0">9</text>
+      <rect x="1485" y="40" width="150" height="110" rx="14" fill="#121b2f" stroke="#22304d" stroke-width="2"/><text x="1560" y="105" fill="#8ea2c0">10</text>
+    </g>
+    <text x="240" y="210" fill="#4ade80" font-size="26" text-anchor="middle">Committed: invoices + Complete marker</text>
+    <text x="735" y="210" fill="#f5b544" font-size="26" text-anchor="middle">In flight: rolls back as a unit</text>
+    <text x="1230" y="210" fill="#8ea2c0" font-size="26" text-anchor="middle">Pending</text>
+    <text x="820" y="300" fill="#38bdf8" font-size="30" text-anchor="middle">Restart: reclaim the run, skip 1–4, process 5–10. Nothing duplicated, nothing missing.</text>
+  </svg>
+</section>
+
+<section id="unique-index" data-part="7" data-cue="Add a safety net in the schema">
+  <h2>A safety net in the schema</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="sql" data-mark="1">CREATE UNIQUE INDEX UX_Invoices_Run_Account ON dbo.Invoices (RunId, AccountId);</pre>
+  <ul>
+    <li>Expand-only (lesson 14): check existing data for duplicates first</li>
+    <li>A replayed chunk <span class="amber">fails loudly</span> instead of silently double-billing</li>
+  </ul>
+</section>
+
+<section id="commit-ambiguity" data-part="7" data-cue="There's one subtle failure the index is especially good for">
+  <h2>When the commit's outcome is unknown</h2>
+  <ul>
+    <li>A connection drops during commit: did it succeed?</li>
+    <li>A retry inserts again</li>
+    <li>The unique index turns that into a <span class="accent">clear error</span></li>
+    <li>Handler: if the chunk is already Complete, treat the violation as success</li>
+  </ul>
+</section>
+
+<section id="acceptance" data-part="7" data-cue="The acceptance test from the work package is concrete">
+  <h2>The acceptance test</h2>
+  <ol>
+    <li>Start a run for the 500 generated Laurentien accounts</li>
+    <li>Cancel the host after a few chunks commit</li>
+    <li>Start it again</li>
+  </ol>
+  <div class="card modern" style="margin-top:20px">
+    <p class="small">Assert: invoice count for the run = count of distinct account IDs</p>
+    <p class="small" style="margin:0">Assert: every billable account has exactly one invoice</p>
+  </div>
+</section>
+
+<section id="perf" data-part="7" data-cue="And then measure performance">
+  <h2>Measure a real number</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Legacy: 3+ round trips per account</h3><p class="small">Find the account · load the schedule and tiers · usp_GetBillableAum</p></div>
+    <div class="card modern"><h3>Chunked: bulk loads</h3><p class="small">Target: 50,000 accounts in under 10 minutes, locally.</p></div>
+  </div>
+  <p class="accent" style="margin-top:40px">Measure it, and report the number.</p>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="8" data-cue="A few traps to call out">
+  <h2>Traps</h2>
+  <ul class="small">
+    <li>Porting the timer: PeriodicTimer fixes overlap in one process, not across instances</li>
+    <li>Select-then-update claiming: under read committed snapshot, both proceed</li>
+    <li>Claims with no expiry: a dead worker leaves its run Running forever</li>
+    <li>Chunking by account when billing is by household</li>
+    <li>Re-slicing on restart: persist chunk membership once</li>
+    <li>Beginning a transaction with retry-on-failure, outside an execution strategy</li>
+    <li>Shutdown timeouts that don't match between host and orchestrator</li>
+    <li>Blaming EF Core for the concurrency exception</li>
+  </ul>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="9" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="9" data-cue="How would you replace a Windows Service in modern .NET?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">How would you replace a Windows Service in modern .NET?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="9" data-cue="With a Worker Service">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Host.CreateApplicationBuilder + a BackgroundService</li>
+    <li>DI, options, logging, graceful shutdown via the stopping token</li>
+    <li>AddWindowsService keeps the Windows option; same binary in a container</li>
+    <li>Fix the design: atomic claims, persisted chunks, idempotent writes</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="9" data-cue="Design a resumable batch job." data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">Design a resumable batch job.</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="9" data-cue="Persist the plan before processing">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Persist the plan: chunks stored with a status</li>
+    <li>Output + "done" marker in one local transaction</li>
+    <li>On restart, skip completed chunks</li>
+    <li>Unique constraints: a replayed chunk fails loudly</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="9" data-cue="How do you use a DbContext in parallel?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">How do you use a DbContext in parallel?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="9" data-cue="You don't share one">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>You don't share one: it isn't thread-safe</li>
+    <li>IDbContextFactory: one short-lived context per unit of work</li>
+    <li>Parallel.ForEachAsync with a maximum degree of parallelism</li>
+    <li>EF Core's exception exposes the legacy bug</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="9" data-cue="How do you stop two instances processing the same work?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">How do you stop two instances processing the same work?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="9" data-cue="An atomic claim. In SQL Server">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>One UPDATE with OUTPUT, using UPDLOCK and READPAST</li>
+    <li>Or a conditional update checked by row count or row version</li>
+    <li>Never select-then-update, especially under RCSI</li>
+    <li>A lease or heartbeat to reclaim a crashed instance's work</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="9" data-cue="What happens to in-flight work during a deploy?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">What happens to in-flight work during a deploy?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="9" data-cue="The host signals the stopping token">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Stopping token + ShutdownTimeout; orchestrator grace period ≥ it</li>
+    <li>Uncommitted work rolls back and is retried after restart</li>
+    <li>Safe only because chunks commit atomically and writes are idempotent</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">The worst bug isn't in the comment: a crash after commit double-bills a firm.</li>
+    <li class="item">BackgroundService + PeriodicTimer: no overlapping ticks; AddWindowsService keeps Windows open.</li>
+    <li class="item">Claim atomically: one UPDATE with OUTPUT, UPDLOCK and READPAST, plus a lease.</li>
+    <li class="item">Persisted chunks, a context and a transaction per chunk, bounded parallelism.</li>
+    <li class="item">Prove resumability by kill-and-restart, guard it with a unique index, measure throughput.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember from this lesson" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: the legacy runner's worst bug" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: a Worker Service with" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: claim work atomically" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: persist chunks" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: resumability is proven" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="10" data-cue="In the next lesson">
+  <div class="kicker">Next</div>
+  <h1>16 · Replacing MSDTC: Outbox and Messaging</h1>
+  <p class="lead">Remove the distributed transaction from the billing run, with a transactional outbox and messaging.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 23 Slides</title>
+<!--
+  Slides for the lesson 23 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="23" data-lesson-title="Cutover, Shadow Runs and Decommissioning" data-parts="Introduction|The questions|Shadow mode|Firm-by-firm cutover|What rollback means|Then fix behaviour|Decommissioning|The runbook|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 23</div>
+  <h1>Cutover, Shadow Runs<br>and Decommissioning</h1>
+  <p class="lead">Done means: the new engine billed real clients, the old one is off, and nobody noticed.</p>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>How do you cut over a billing system?</li>
+    <li>What does rollback mean once invoices have been sent?</li>
+    <li>When is a migration done?</li>
+    <li>You found a legacy bug during the migration. When do you fix it?</li>
+  </ul>
+</section>
+
+<section id="goal" data-part="1" data-cue="Keep the goal in mind: legacy is off, and nobody noticed">
+  <div class="kicker">The goal</div>
+  <p class="quote">Legacy is off, and <span class="accent">nobody noticed</span>.</p>
+  <div class="cols" style="margin-top:56px">
+    <p class="muted small">Evidence before cutover · small steps during it</p>
+    <p class="muted small">Rollback defined before you need it · measure before you delete</p>
+  </div>
+</section>
+
+<!-- ───────────── Shadow mode ───────────── -->
+<section id="evidence" data-part="2" data-cue="Golden-master tests, from lesson four">
+  <h2>Two kinds of evidence</h2>
+  <div class="cols">
+    <div class="card"><h3>Golden master (lesson 04)</h3><p>New engine matches legacy on the seed scenarios.</p></div>
+    <div class="card modern"><h3>Shadow mode</h3><p>Matches legacy on real production data, at full scale, over time.</p></div>
+  </div>
+</section>
+
+<section id="shadow-how" data-part="2" data-cue="Here's how it works">
+  <h2>How shadow mode works</h2>
+  <svg width="1640" height="470" viewBox="0 0 1640 470">
+    <defs><marker id="arrow-sh" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="170" width="300" height="130" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="150" y="228" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Same inputs</text>
+    <text x="150" y="268" fill="#8ea2c0" font-size="24" text-anchor="middle">AUM, schedules, accounts</text>
+    <path d="M305,210 C400,210 400,85 500,85" fill="none" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow-sh)"/>
+    <path d="M305,260 C400,260 400,385 500,385" fill="none" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow-sh)"/>
+    <rect x="510" y="20" width="480" height="130" rx="18" fill="#221b0d" stroke="#f5b544" stroke-width="3"/>
+    <text x="750" y="78" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">Legacy billing run</text>
+    <text x="750" y="118" fill="#8ea2c0" font-size="24" text-anchor="middle">system of record</text>
+    <rect x="510" y="320" width="480" height="130" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="750" y="378" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">Modern worker</text>
+    <text x="750" y="418" fill="#8ea2c0" font-size="24" text-anchor="middle">BillingPolicy.Legacy</text>
+    <line x1="995" y1="85" x2="1125" y2="85" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow-sh)"/>
+    <line x1="995" y1="385" x2="1125" y2="385" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow-sh)"/>
+    <rect x="1135" y="20" width="505" height="130" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="1387" y="78" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">Invoices</text>
+    <text x="1387" y="118" fill="#8ea2c0" font-size="24" text-anchor="middle">clients only ever see these</text>
+    <rect x="1135" y="320" width="505" height="130" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="1387" y="378" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">ShadowInvoices</text>
+    <text x="1387" y="418" fill="#8ea2c0" font-size="24" text-anchor="middle">+ calculation trace · not built yet</text>
+  </svg>
+</section>
+
+<section id="nightly-diff" data-part="2" data-cue="Then a nightly job diffs shadow against legacy">
+  <h2>A nightly, classified diff</h2>
+  <p class="muted">Account by account, every difference gets a parity-report category (lesson 04):</p>
+  <div class="cols">
+    <div class="card"><p class="accent">DOUBLE_PRECISION</p><p class="accent">ROUNDING_MODE</p></div>
+    <div class="card"><p class="accent">DAY_COUNT</p><p class="accent">ALLOCATION_PENNY</p></div>
+  </div>
+  <p style="margin-top:36px">Every difference is <span class="accent">explained</span> (ADR or ticket), or it's <span class="amber">a bug</span>.</p>
+</section>
+
+<section id="allowlist" data-part="2" data-cue="The known-differences allowlist from lesson four">
+  <h2>"Explained" means allowlisted</h2>
+  <div class="cols">
+    <div class="card">
+      <h3>Each allowlist entry names</h3>
+      <ul>
+        <li>A category</li>
+        <li>The accounts or scenarios it covers</li>
+        <li>The maximum amount</li>
+        <li>The ADR or ticket</li>
+      </ul>
+    </div>
+    <div class="card modern">
+      <h3>The report, per firm</h3>
+      <ul>
+        <li>Accounts matched exactly</li>
+        <li>Accounts that differ, by category</li>
+        <li>Total dollar impact</li>
+      </ul>
+      <p class="small muted">Anything unexplained fails the check and pages someone.</p>
+    </div>
+  </div>
+</section>
+
+<section id="same-inputs" data-part="2" data-cue="If a custodian position file lands between the legacy run and the shadow run">
+  <h2>"Same inputs" is a trap</h2>
+  <p>A position file lands between the two runs → different AUM → a difference that has <span class="amber">nothing to do with the engine</span>.</p>
+  <p class="accent" style="margin-top:36px">Snapshot the billing inputs. Run both engines against the same snapshot.</p>
+</section>
+
+<section id="exit-criteria" data-part="2" data-cue="When do you leave shadow mode?">
+  <h2>Leaving shadow mode: not on a feeling</h2>
+  <ul class="checks">
+    <li>A full quarter of shadow runs for <b>all</b> firms</li>
+    <li>Zero unexplained differences for <b>two consecutive</b> runs</li>
+    <li>Month-end shadow runs too, for more samples</li>
+    <li>Named sign-offs: product, finance or compliance, client success</li>
+  </ul>
+</section>
+
+<section id="reverse-shadow" data-part="2" data-cue="After a firm cuts over, reverse it">
+  <h2>After cutover: reverse shadow</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Modern engine</h3><p>System of record</p></div>
+    <div class="card legacy"><h3 class="amber">Legacy engine</h3><p>Runs in shadow for one cycle</p></div>
+  </div>
+  <p style="margin-top:40px">The diff must still be zero, or every difference explained. The safety net for the first live run.</p>
+</section>
+
+<!-- ───────────── Firm-by-firm cutover ───────────── -->
+<section id="per-firm-flag" data-part="3" data-cue="Never cut over all forty firms at once">
+  <h2>The unit of cutover is the firm</h2>
+  <p>A per-firm flag: <span class="accent">billing engine = Legacy | Modern</span></p>
+  <p class="muted">Microsoft.FeatureManagement, or Azure App Configuration feature flags targeting individual firms.</p>
+</section>
+
+<section id="flag-once" data-part="3" data-cue="The most important design point is when the flag is evaluated">
+  <h2>Evaluate the flag once, at enqueue time</h2>
+  <div class="file">Sketch · target design · StartBillingRun handler</div>
+  <pre class="code" data-lang="cs" data-mark="2,3">// Decide once, when the run is enqueued, and record the decision on the run.
+var engine = engineSelector.EngineFor(firmId);          // Legacy | Modern, from the per-firm flag
+db.BillingRuns.Add(new BillingRun { FirmId = firmId, PeriodEnd = periodEnd, Engine = engine });
+
+// The worker reads run.Engine. It never re-reads the flag mid-run.</pre>
+  <p class="muted">Otherwise a flag flip mid-run gives you a run that's half legacy, half modern.</p>
+</section>
+
+<section id="flag-controlled" data-part="3" data-cue="Treat the flag itself as a controlled change, too">
+  <h2>The flag is a controlled change</h2>
+  <ul class="checks">
+    <li>Flipping a firm to modern needs the same approval as a deployment</li>
+    <li>The flag store keeps an audit history: who changed what, and when</li>
+  </ul>
+  <p class="quote" style="margin-top:48px;font-size:44px">"Which engine billed this invoice, and who decided that?"</p>
+</section>
+
+<section id="first-firm" data-part="3" data-cue="Which firm goes first?">
+  <h2>Which firm goes first?</h2>
+  <div class="cols">
+    <div class="card"><h3>Maple Ridge</h3><p>Smallest: 13 accounts. But every edge case, S1 to S10: tiers, boundaries, minimums, blended, flat, households, zero AUM, mid-quarter opening, large withdrawal.</p></div>
+    <div class="card"><h3>Groupe Financier Laurentien</h3><p>Larger: 500 accounts. More uniform, but French-Canadian custodian files.</p></div>
+  </div>
+  <p class="accent" style="margin-top:36px">Pick by written criteria: size, complexity, client relationship, data quality.</p>
+</section>
+
+<section id="two-flags" data-part="3" data-cue="And keep two flags separate">
+  <h2>Two separate flags</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Engine flag</h3><p>Does the modern engine bill this firm?</p></div>
+    <div class="card"><h3>Policy flag</h3><p>Legacy behaviour, or corrected behaviour?</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Rollback ───────────── -->
+<section id="invoice-states" data-part="4" data-cue="Rollback in a billing system isn't">
+  <h2>Rollback depends on how far invoices travelled</h2>
+  <div class="file">database/billing/001-schema.sql</div>
+  <pre class="code tight" data-lang="sql" data-mark="2,6">-- dbo.Invoices
+Status          varchar(20)     NOT NULL CONSTRAINT DF_Invoices_Status DEFAULT ('Draft'),
+-- …
+CREATE TABLE dbo.FeeDebits
+(
+    InvoiceId           int             NOT NULL,
+    -- …
+    DebitedAmount       decimal(19,2)   NOT NULL,
+    DebitedOn           date            NOT NULL,</pre>
+</section>
+
+<section id="approve-one-way" data-part="4" data-cue="Then look at how approval works">
+  <h2>Approval is one-way</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/BillingController.cs · ApproveRun (SQL shown on three lines)</div>
+  <pre class="code" data-lang="sql" data-mark="2">UPDATE dbo.Invoices
+SET Status = 'Approved', ApprovedBy = @p0, ApprovedOn = GETDATE()
+WHERE RunId = @p1 AND Status = 'Draft'</pre>
+  <div class="file">legacy/FeeBilling.Web/App/billing/run-invoices.controller.js</div>
+  <pre class="code tight" data-lang="js" data-mark="1">if (!$window.confirm('Approve all draft invoices in run ' + runId + '? This cannot be undone.')) {</pre>
+</section>
+
+<template id="rollback-states">
+  <h2>Define rollback per state, before cutover</h2>
+  <div class="cols3">
+    <div class="card item"><h3>Draft</h3><p>Void the modern run (status Voided, an expand change) and re-run on legacy. Keep both runs.</p></div>
+    <div class="card item"><h3>Approved, not debited</h3><p>Void each invoice with a reason and a link to its replacement. Re-approve. Tell the reviewer.</p></div>
+    <div class="card item"><h3>Debited</h3><p>Money moved. Compensating credit or next-period adjustment, reconciled, communicated.</p></div>
+  </div>
+  <p class="muted small" style="margin-top:36px">Agreed with finance and compliance.</p>
+</template>
+<section id="rollback-0" data-part="4" data-cue="So define rollback per state, before cutover" data-template="rollback-states"></section>
+<section id="rollback-1" data-part="4" data-cue="If the run is complete and the invoices are still drafts" data-template="rollback-states" data-highlight="1"></section>
+<section id="rollback-2" data-part="4" data-cue="If invoices are approved but no fee debit has been instructed yet" data-template="rollback-states" data-highlight="2"></section>
+<section id="rollback-3" data-part="4" data-cue="If a fee debit has been instructed or collected, money has moved" data-template="rollback-states" data-highlight="3"></section>
+
+<section id="reconcile" data-part="4" data-cue="the stored procedure that already compares billed against debited">
+  <h2>Reconcile billed against debited</h2>
+  <div class="file">database/billing/002-stored-procedures.sql · usp_ReconcileFeeDebits</div>
+  <pre class="code tight" data-lang="sql" data-mark="5,11">SELECT  i.Id                        AS InvoiceId,
+        a.AccountNumber,
+        i.Amount                    AS InvoicedAmount,
+        ISNULL(SUM(d.DebitedAmount), 0) AS DebitedAmount,
+        i.Amount - ISNULL(SUM(d.DebitedAmount), 0) AS Difference
+FROM dbo.Invoices i
+INNER JOIN dbo.Accounts a ON a.Id = i.AccountId
+LEFT  JOIN dbo.FeeDebits d ON d.InvoiceId = i.Id
+WHERE i.RunId = @RunId
+GROUP BY i.Id, a.AccountNumber, i.Amount
+HAVING i.Amount &lt;&gt; ISNULL(SUM(d.DebitedAmount), 0);</pre>
+</section>
+
+<section id="no-delete" data-part="4" data-cue="Notice what's missing from all three: DELETE">
+  <div class="kicker">Financial records</div>
+  <p class="quote">Rollback is <span class="accent">void, reissue, credit and reconcile</span>. Never <span class="amber">DELETE</span>.</p>
+  <p class="muted" style="margin-top:40px">Always with an audit trail.</p>
+</section>
+
+<section id="stay-possible" data-part="4" data-cue="Rollback also has to stay possible">
+  <h2>Keep rollback possible for a full cycle</h2>
+  <ul class="checks">
+    <li>IIS up</li>
+    <li>The Windows Service installed, but disabled</li>
+    <li>Schema still readable by the legacy EDMX (expand and contract)</li>
+    <li>Rollback rehearsed with a monthly drill</li>
+  </ul>
+</section>
+
+<!-- ───────────── Then fix behaviour ───────────── -->
+<section id="corrected" data-part="5" data-cue="During the migration, you'll have found legacy bugs">
+  <h2>BillingPolicy.Corrected</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Legacy bugs (lesson 05)</h3><ul><li>Money in double</li><li>Per-tier rounding</li><li>Hard-coded ÷ 4</li><li>Allocation off by a penny</li></ul></div>
+    <div class="card modern"><h3>The corrected preset</h3><ul><li>Decimal throughout</li><li>Rounding at the end</li><li>Actual/365 day count</li><li>Largest-remainder allocation</li></ul></div>
+  </div>
+</section>
+
+<section id="after-cutover" data-part="5" data-cue="It ships after cutover, as a separate change">
+  <h2>After cutover, separately, quantified</h2>
+  <p class="muted">Own flag · own sign-off · own client communication</p>
+  <div class="cols" style="margin-top:24px">
+    <div class="card"><h3>S1 · $2.5M, STD-TIERED, legacy ÷ 4</h3><p style="font-size:56px">$5,312.50</p></div>
+    <div class="card modern"><h3>S1 · actual/365</h3><p style="font-size:56px">$5,356.16</p></div>
+  </div>
+  <p class="amber" style="margin-top:32px">+$43.66 per quarter, for that one client.</p>
+</section>
+
+<section id="clientx" data-part="5" data-cue="And there's a twist">
+  <h2>The twist: ClientX</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.ClientX.config</div>
+  <pre class="code tight" data-lang="xml" data-mark="2">&lt;!-- ClientX's fee agreement says actual/365. See Billing.DayCountBasis in Web.config: nothing reads it. --&gt;
+&lt;add key="Billing.DayCountBasis" value="Actual/365" xdt:Transform="SetAttributes" xdt:Locator="Match(key)" /&gt;</pre>
+  <p>The calculators always divide by four. ClientX has been billed differently from their contract for years.</p>
+  <p class="accent">A conversation for account management, with numbers.</p>
+</section>
+
+<section id="impact-report" data-part="5" data-cue="What do client firms need to know?">
+  <h2>A per-firm impact report</h2>
+  <ul>
+    <li>Total change in fees per quarter</li>
+    <li>Largest change for any single account</li>
+    <li>How many accounts go up, how many go down</li>
+    <li>Interaction with minimum fees</li>
+  </ul>
+  <p class="muted small" style="margin-top:24px">Then agree an effective date, and opt-in or contractual. The per-firm policy flag honours both.</p>
+</section>
+
+<section id="two-changes" data-part="5" data-cue="If invoices change on cutover day">
+  <div class="kicker">The rule</div>
+  <p class="quote">Two flags. Two changes. <span class="accent">Two sign-offs.</span></p>
+  <p class="muted" style="margin-top:48px">If invoices change on cutover day, you must know whether the engine or the policy did it.</p>
+</section>
+
+<!-- ───────────── Decommissioning ───────────── -->
+<section id="decom-order" data-part="6" data-cue="Decommissioning in a safe order">
+  <h2>Decommissioning has an order</h2>
+  <div class="timeline">
+    <div class="card"><h3>1 · Measure</h3><p>Who still uses it?</p></div>
+    <div class="card"><h3>2 · Switch off</h3><p>And wait.</p></div>
+    <div class="card legacy"><h3 class="amber">3 · Delete</h3><p>Only then.</p></div>
+  </div>
+</section>
+
+<section id="fallback-last" data-part="6" data-cue="The last things you delete are the gateway's fallback route">
+  <h2>Delete the fallback route last</h2>
+  <div class="file">src/FeeBilling.Gateway/appsettings.json</div>
+  <pre class="code tight" data-lang="json" data-mark="1">"fallback":   { "ClusterId": "legacy-iis",      "Match": { "Path": "{**catch-all}" }, "Order": 1000 }
+// …
+"legacy-iis": {
+  "Destinations": {
+    "iis": { "Address": "http://localhost:8080/" }</pre>
+  <p>First: <span class="accent">zero traffic for an agreed period</span>, measured with gateway metrics.</p>
+</section>
+
+<section id="invisible-consumers" data-part="6" data-cue="So find the invisible consumers first">
+  <h2>Find the invisible consumers</h2>
+  <div class="file">legacy/FeeBilling.Ingestion.Wcf/ICustodianFeedService.cs</div>
+  <pre class="code tight" data-lang="cs">/// &lt;summary&gt;Invoked every 15 minutes by the FeedProcessor scheduled task on APP01.&lt;/summary&gt;</pre>
+  <div class="file">legacy/FeeBilling.Data/FeeBillingEntities.Partial.cs</div>
+  <pre class="code tight" data-lang="cs">// Added for the month-end export tool, which builds its connection string at runtime.</pre>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code tight" data-lang="xml">&lt;add key="Custodian.FeedArchivePath" value="\\fileserver01\custodian-feeds\archive" /&gt;</pre>
+  <p class="small muted">Plus anyone parsing the DataSet shape of the invoice export. Each needs an owner who confirms its replacement.</p>
+</section>
+
+<section id="checklist" data-part="6" data-cue="Then walk the checklist">
+  <h2>The decommission checklist</h2>
+  <table>
+    <tr><th>Area</th><th>Action</th></tr>
+    <tr><td>Routing</td><td>Remove the fallback route</td></tr>
+    <tr><td>Legacy web</td><td>Delete MIGRATED controllers; remove the remote-app server and its API key</td></tr>
+    <tr><td>Ingestion</td><td>Retire the CoreWCF shim; migrate or archive BinaryFormatter payloads</td></tr>
+    <tr><td>Billing runner</td><td>Uninstall the service; remove MSDTC config; disable its domain account</td></tr>
+    <tr><td>Data</td><td>Archive the EDMX; EF Core migrations own the schema</td></tr>
+    <tr><td>Shared code</td><td>Retarget FeeBilling.Domain to net10.0</td></tr>
+    <tr><td>CI</td><td>Remove the legacy job; tag the final legacy state</td></tr>
+  </table>
+</section>
+
+<section id="installer-domain" data-part="6" data-cue="ProjectInstaller.cs says it runs as a domain account called svc-billing">
+  <h2>The code tells you what to remove</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/ProjectInstaller.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1">// Runs as the FEEBILLING\svc-billing domain account (MSDTC needs network access).
+Account = ServiceAccount.User</pre>
+  <div class="file">src/FeeBilling.Domain/FeeBilling.Domain.csproj</div>
+  <pre class="code" data-lang="xml" data-mark="3">&lt;!--
+  Shared between the legacy .NET Framework solution and the new .NET 10 services during the
+  transition, hence netstandard2.0. Retarget to net10.0 once no Framework project references it.
+--&gt;</pre>
+</section>
+
+<section id="forgotten" data-part="6" data-cue="Two items people forget">
+  <h2>Two items people forget</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Secrets</h3><p>Rotate everything ever committed: machine keys, database passwords in Web.Release.config and Web.ClientX.config. Deleting a file doesn't remove it from git history.</p></div>
+    <div class="card"><h3>Retention</h3><p>Archive logs, generated invoices and database backups under the regulated retention policy, with the owner's sign-off.</p></div>
+  </div>
+</section>
+
+<section id="done" data-part="6" data-cue="When legacy is switched off, its fallback route has seen zero traffic">
+  <h2>A migration is done when…</h2>
+  <ul class="checks">
+    <li>Legacy is switched off</li>
+    <li>The fallback route has seen zero traffic for the agreed period</li>
+    <li>Its data is archived under retention rules</li>
+    <li>Its CI job, servers, accounts and secrets are gone</li>
+  </ul>
+  <p class="amber" style="margin-top:28px">Until then, you're paying for two systems.</p>
+</section>
+
+<!-- ───────────── Runbook ───────────── -->
+<section id="runbook" data-part="7" data-cue="Everything above becomes a runbook, one per firm">
+  <h2>A runbook, one per firm</h2>
+  <p>Every step has:</p>
+  <ul class="checks">
+    <li>An owner, named as a role, not a person</li>
+    <li>A time</li>
+    <li>A verification, with the expected result written in advance</li>
+  </ul>
+</section>
+
+<template id="runbook-steps">
+  <h2>The cutover runbook</h2>
+  <div class="steps">
+    <div class="step item"><span class="num">1</span>T−2 weeks: exit criteria, sign-offs, comms</div>
+    <div class="step item"><span class="num">2</span>Day before: freeze schedules, snapshot inputs</div>
+    <div class="step item"><span class="num">3</span>Day of: flip flag, enqueue, verify queries</div>
+    <div class="step item"><span class="num">4</span>Reverse shadow: diff zero or explained</div>
+    <div class="step item"><span class="num">5</span>Rollback trigger and decision-maker, in advance</div>
+    <div class="step item"><span class="num">6</span>One cycle later: legacy retired for the firm</div>
+  </div>
+</template>
+<section id="runbook-1" data-part="7" data-cue="Two weeks before" data-template="runbook-steps" data-highlight="1"></section>
+<section id="runbook-2" data-part="7" data-cue="The day before" data-template="runbook-steps" data-highlight="2"></section>
+<section id="runbook-3" data-part="7" data-cue="On the day" data-template="runbook-steps" data-highlight="3"></section>
+<section id="runbook-4" data-part="7" data-cue="Then reverse shadow" data-template="runbook-steps" data-highlight="4"></section>
+<section id="runbook-5" data-part="7" data-cue="The rollback trigger is written down in advance" data-template="runbook-steps" data-highlight="5"></section>
+<section id="runbook-6" data-part="7" data-cue="And one full cycle later" data-template="runbook-steps" data-highlight="6"></section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="8" data-cue="Leaving shadow mode on a feeling">
+  <h2>Traps</h2>
+  <ul class="small">
+    <li>Leaving shadow mode on a feeling</li>
+    <li>Different inputs producing false differences: snapshot the AUM</li>
+    <li>Re-evaluating the flag mid-run: decide at enqueue time</li>
+    <li>Rollback by DELETE: void, reissue, credit, reconcile</li>
+    <li>Fixing the bug during cutover</li>
+    <li>Deleting the fallback route before measuring it</li>
+    <li>"Decommissioned", but still paying for accounts, servers, firewall rules, CI runner</li>
+    <li>Assuming that deleting a file removes a secret</li>
+  </ul>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="9" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Four questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="9" data-cue="How do you cut over a billing system?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 4</div>
+  <p class="question">How do you cut over a billing system?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="9" data-cue="With evidence first">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>A full quarter of shadow runs, same input snapshot, nightly classified diff</li>
+    <li>Exit: two consecutive runs with zero unexplained differences, named sign-offs</li>
+    <li>Firm by firm; flag evaluated once at enqueue time and stored on the run</li>
+    <li>Legacy runnable for a cycle, in reverse shadow; rollback rehearsed</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="9" data-cue="What does rollback mean once invoices have been sent?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 4</div>
+  <p class="question">What does rollback mean once invoices have been sent?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="9" data-cue="It depends on the invoice state">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Draft: void, redo the run on legacy</li>
+    <li>Approved: void and reissue, with an audit link</li>
+    <li>Debited: compensating credit or next-period adjustment, reconciled, communicated</li>
+    <li>Never deletes; agreed with finance and compliance before cutover</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="9" data-cue="When is a migration done?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 4</div>
+  <p class="question">When is a migration done?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="9" data-cue="When the legacy system is switched off and nobody noticed">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Legacy switched off, and nobody noticed</li>
+    <li>Zero fallback traffic for an agreed period</li>
+    <li>Hidden consumers have owners and replacements</li>
+    <li>Data archived; CI job, servers, accounts gone; committed secrets rotated</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="9" data-cue="You found a legacy bug during the migration. When do you fix it?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 4</div>
+  <p class="question">You found a legacy bug during the migration. When do you fix it?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="9" data-cue="After cutover, as a separate change behind its own per-firm flag">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>After cutover, behind its own per-firm flag, with business sign-off</li>
+    <li>Quantified: ÷ 4 → actual/365 moves a $2.5M account by $43.66 a quarter</li>
+    <li>Migration and behaviour changes never ship together</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Shadow runs are the evidence: same inputs, classified diff, objective exit criteria.</li>
+    <li class="item">One firm at a time; the engine chosen once at enqueue time and recorded on the run.</li>
+    <li class="item">Rollback per invoice state: void, reissue, credit, reconcile. Never delete.</li>
+    <li class="item">Behaviour fixes ship after cutover, separately, quantified and communicated.</li>
+    <li class="item">Decommission in order: measure, switch off, delete. Rotate every committed secret.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: shadow runs are the evidence" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: cut over one firm at a time" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: rollback is defined per invoice state" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: behaviour fixes ship after cutover" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: decommission in order" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="10" data-cue="In the final lesson">
+  <div class="kicker">Next · the final lesson</div>
+  <h1>24 · CI Guardrails and Team Enablement</h1>
+  <p class="lead">Turning the series into guardrails, so the rest of the team can finish the migration safely.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

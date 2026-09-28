@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work packages:** WP-03 (route the Billing API), WP-10 (remove the fallback) · **Prerequisites:** 01, 07
 
-**Audio lesson:** [09-yarp-gateway-incremental-routing.mp3](09-yarp-gateway-incremental-routing.mp3) · [Transcript](script.md)
+**Video:** [09-yarp-gateway-incremental-routing.mp4](09-yarp-gateway-incremental-routing.mp4) · [Slides](slides.html) · **Audio lesson:** [09-yarp-gateway-incremental-routing.mp3](09-yarp-gateway-incremental-routing.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

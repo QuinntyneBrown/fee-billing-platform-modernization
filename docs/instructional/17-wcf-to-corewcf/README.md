@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-05 (transport) · **Prerequisites:** 01, 09
 
-**Audio lesson:** [17-wcf-to-corewcf.mp3](17-wcf-to-corewcf.mp3) · [Transcript](script.md)
+**Video:** [17-wcf-to-corewcf.mp4](17-wcf-to-corewcf.mp4) · [Slides](slides.html) · **Audio lesson:** [17-wcf-to-corewcf.mp3](17-wcf-to-corewcf.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

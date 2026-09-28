@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 08 Slides</title>
+<!--
+  Slides for the lesson 08 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="08" data-lesson-title="Dependency Injection and Ambient State" data-parts="Introduction|The questions|Ambient state|Ambient state in FeeBilling|Unity to built-in DI|Lifetimes and scopes|Refactoring path|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 08</div>
+  <h1>Dependency Injection<br>and Ambient State</h1>
+  <p class="lead">Getting rid of hidden dependencies, starting with HttpContext.Current</p>
+</section>
+
+<section id="one-choice" data-part="0" data-cue="That one design choice explains why the fee calculators are static">
+  <h2>One design choice explains…</h2>
+  <ul>
+    <li>Why the fee calculators are static</li>
+    <li>Why the Windows Service fakes a web request</li>
+    <li>Why tests are flaky</li>
+    <li>Why one request can hold <span class="amber">two different database contexts</span></li>
+  </ul>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>How do you remove HttpContext.Current from a codebase?</li>
+    <li>What's a captive dependency?</li>
+    <li>How do you use a scoped DbContext from a background service?</li>
+    <li>Keep Unity or Autofac, or move to the built-in container?</li>
+    <li>Why were the fee calculators static, and why does that matter?</li>
+  </ul>
+</section>
+
+<section id="real-answer" data-part="1" data-cue="Interviewers like the first question">
+  <h2>Two answers to question one</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">The cheat sheet</h3><p>"Use IHttpContextAccessor."</p></div>
+    <div class="card modern"><h3>The real answer starts with a question</h3><p>What is the code actually <span class="accent">using HttpContext for</span>?</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Ambient state ───────────── -->
+<section id="definition" data-part="2" data-cue="What ambient state is, and why it hurts">
+  <h2>Ambient state</h2>
+  <p>Data or a service that code <span class="amber">reaches out and grabs</span> from somewhere global, instead of receiving it as a parameter or through its constructor.</p>
+  <div class="cols" style="margin-top:20px">
+    <ul>
+      <li>HttpContext.Current</li>
+      <li>HttpRuntime.Cache</li>
+    </ul>
+    <ul>
+      <li>A static logger</li>
+      <li>DateTime.Now, a dependency on the clock</li>
+    </ul>
+  </div>
+</section>
+
+<section id="hidden-parameter" data-part="2" data-cue="The problem with ambient state is that it's a hidden parameter">
+  <h2>A hidden parameter</h2>
+  <pre class="code" data-lang="cs">public static decimal CalculateQuarterlyFee(int accountId, DateTime periodEnd)</pre>
+  <div class="cols">
+    <div class="card"><h3>What the signature says</h3><p>An account ID and a period end</p></div>
+    <div class="card legacy"><h3 class="amber">What it secretly needs</h3><p>A live web request, a database connection hanging off it, a warm cache, the current time</p></div>
+  </div>
+</section>
+
+<section id="thread-tied" data-part="2" data-cue="Ambient state also tends to be tied to a thread">
+  <h2>Tied to a thread</h2>
+  <div class="cols3">
+    <div class="card modern"><h3>IIS request thread</h3><p>ASP.NET flows HttpContext.Current with the request</p></div>
+    <div class="card legacy"><h3 class="amber">Timer thread</h3><p>HttpContext.Current is null</p></div>
+    <div class="card legacy"><h3 class="amber">Parallel.ForEach</h3><p>Thread-pool threads: null</p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">Code that "works" in IIS breaks the moment you call it from anywhere else.</p>
+</section>
+
+<section id="di-fix" data-part="2" data-cue="Dependency injection is the fix">
+  <h2>Dependency injection is the fix</h2>
+  <ul>
+    <li>A class declares what it needs <span class="accent">in its constructor</span></li>
+    <li>The <b>composition root</b>, at the edge, decides how to build things and how long they live</li>
+    <li>The dependency stops being hidden, and becomes replaceable</li>
+  </ul>
+</section>
+
+<!-- ───────────── Ambient state in FeeBilling ───────────── -->
+<section id="db-context-factory" data-part="3" data-cue="Ambient state in FeeBilling">
+  <div class="kicker">One context per request, stored on the request</div>
+  <div class="file">legacy/FeeBilling.Data/DbContextFactory.cs</div>
+  <pre class="code" data-lang="cs" data-mark="5,9,10">public static FeeBillingEntities Current
+{
+    get
+    {
+        var items = HttpContext.Current.Items;
+        var db = items[ItemsKey] as FeeBillingEntities;
+        if (db == null)
+        {
+            db = new FeeBillingEntities();
+            items[ItemsKey] = db;
+        }
+        return db;
+    }
+}</pre>
+  <p class="small muted">Global.asax.cs: Application_EndRequest calls DbContextFactory.DisposeCurrent().</p>
+</section>
+
+<section id="who-uses-it" data-part="3" data-cue="Who uses it?">
+  <h2>Who uses it?</h2>
+  <pre class="code" data-lang="sh">git grep -n "DbContextFactory.Current" -- legacy</pre>
+  <div class="cols">
+    <ul>
+      <li>FeeCalculator · BlendedFeeCalculator</li>
+      <li>FlatFeeCalculator · HouseholdFeeService</li>
+      <li>AumService · BillingRunService</li>
+      <li>Several Web API controllers</li>
+    </ul>
+    <div class="card legacy"><h3 class="amber">Every Core class is static</h3><p>A static class can't receive constructor dependencies, so it reaches for ambient state. They reinforce each other.</p></div>
+  </div>
+</section>
+
+<section id="fake-context" data-part="3" data-cue="Now look at what happens outside IIS">
+  <h2>Outside IIS: make one up</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/FakeHttpContext.cs</div>
+  <pre class="code" data-lang="cs" data-mark="3,4,7">public static HttpContext Create()
+{
+    var request = new HttpRequest(string.Empty, "http://localhost/", string.Empty);
+    var response = new HttpResponse(new StringWriter());
+    var context = new HttpContext(request, response)
+    {
+        User = new GenericPrincipal(new GenericIdentity("BillingRunner"), new string[0])
+    };
+    return context;
+}</pre>
+</section>
+
+<section id="three-assignments" data-part="3" data-cue="Then open BillingRunnerService.cs">
+  <h2>Three patches, one root cause</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/BillingRunnerService.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="3,8,12">protected override void OnStart(string[] args)
+{
+    HttpContext.Current = FakeHttpContext.Create();   // so FeeCalculator works outside IIS
+    // …
+}
+private void ProcessQueue()
+{
+    HttpContext.Current = _fakeContext;   // timer threads don't inherit HttpContext
+    // …
+    Parallel.ForEach(accounts.Where(…), acct =>   // shared DbContext across threads
+    {
+        HttpContext.Current = _fakeContext;   // FB-402: pool threads have no HttpContext either</pre>
+</section>
+
+<section id="shared-context" data-part="3" data-cue="And look at what the parallel loop shares">
+  <h2>One context, many threads</h2>
+  <svg width="1640" height="420" viewBox="0 0 1640 420">
+    <defs><marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="18" refX="16" refY="9" orient="auto"><path d="M0,0 L18,9 L0,18 z" fill="#f5b544"/></marker></defs>
+    <rect x="0" y="10" width="360" height="80" rx="14" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="180" y="60" fill="#e8eef8" font-size="30" text-anchor="middle">Pool thread 1</text>
+    <rect x="0" y="120" width="360" height="80" rx="14" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="180" y="170" fill="#e8eef8" font-size="30" text-anchor="middle">Pool thread 2</text>
+    <rect x="0" y="230" width="360" height="80" rx="14" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="180" y="280" fill="#e8eef8" font-size="30" text-anchor="middle">Pool thread 3</text>
+    <rect x="0" y="340" width="360" height="70" rx="14" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="180" y="385" fill="#8ea2c0" font-size="30" text-anchor="middle">…</text>
+    <line x1="370" y1="50" x2="566" y2="160" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow)"/>
+    <line x1="370" y1="160" x2="566" y2="193" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow)"/>
+    <line x1="370" y1="270" x2="566" y2="227" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow)"/>
+    <line x1="370" y1="375" x2="566" y2="260" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="570" y="140" width="420" height="140" rx="18" fill="#121b2f" stroke="#f5b544" stroke-width="3"/>
+    <text x="780" y="200" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">One fake HttpContext</text>
+    <text x="780" y="244" fill="#8ea2c0" font-size="26" text-anchor="middle">_fakeContext</text>
+    <line x1="1000" y1="210" x2="1186" y2="210" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="1190" y="140" width="450" height="140" rx="18" fill="#221b0d" stroke="#f87171" stroke-width="3"/>
+    <text x="1415" y="200" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">One FeeBillingEntities</text>
+    <text x="1415" y="244" fill="#f87171" font-size="26" text-anchor="middle">used concurrently</text>
+  </svg>
+</section>
+
+<section id="flaky-test" data-part="3" data-cue="Static state also leaks into tests">
+  <h2>Static state leaks into tests</h2>
+  <div class="file">legacy/FeeBilling.Core/FeeCalculator.cs</div>
+  <pre class="code tight" data-lang="cs">var aum = HttpRuntime.Cache[cacheKey] as double?;
+// …
+    HttpRuntime.Cache.Insert(cacheKey, aum, null,
+        DateTime.Now.AddMinutes(30), Cache.NoSlidingExpiration); // local time</pre>
+  <div class="file">legacy/FeeBilling.Tests/Core/FeeCalculatorTests.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1">[TestMethod, Ignore("Flaky - cache from previous test")]</pre>
+  <p class="muted">One test's result depends on which tests ran before it.</p>
+</section>
+
+<section id="unity-two-contexts" data-part="3" data-cue="Finally, the strangest one">
+  <h2>The strangest one</h2>
+  <div class="file">legacy/FeeBilling.Web/App_Start/UnityConfig.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,2">// Newer controllers take FeeBillingEntities in the constructor; older code uses
+// DbContextFactory.Current. They are NOT the same instance within a request.
+container.RegisterType&lt;FeeBillingEntities&gt;(new HierarchicalLifetimeManager(), new InjectionConstructor());</pre>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/FeeSchedulesController.cs</div>
+  <pre class="code tight" data-lang="cs">// Injected by Unity (UnityConfig). Not the same context as DbContextFactory.Current.
+public FeeSchedulesController(FeeBillingEntities db)</pre>
+</section>
+
+<section id="two-units-of-work" data-part="3" data-cue="So if a controller saves a change through its injected context">
+  <h2>One request, two units of work</h2>
+  <div class="cols">
+    <div class="card"><h3>Injected context</h3><p>The controller saves a change here</p></div>
+    <div class="card legacy"><h3 class="amber">Ambient context</h3><p>A Core service reads here, and never saw the first context's tracked entities</p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">Nobody designed it that way.</p>
+</section>
+
+<!-- ───────────── Unity to built-in DI ───────────── -->
+<section id="one-container" data-part="4" data-cue="From Unity to the built-in container">
+  <h2>One built-in container</h2>
+  <p>Microsoft.Extensions.DependencyInjection. The host builds one service provider. Both Unity adapters disappear:</p>
+  <div class="file">legacy/FeeBilling.Web/App_Start/UnityConfig.cs</div>
+  <pre class="code tight" data-lang="cs">DependencyResolver.SetResolver(new Unity.AspNet.Mvc.UnityDependencyResolver(container));
+GlobalConfiguration.Configuration.DependencyResolver =
+    new Unity.AspNet.WebApi.UnityHierarchicalDependencyResolver(container);</pre>
+</section>
+
+<section id="mapping" data-part="4" data-cue="Mapping the Unity registrations is mostly mechanical">
+  <h2>Mapping the registrations</h2>
+  <table>
+    <tr><th>Unity</th><th>Built-in container</th></tr>
+    <tr><td>RegisterType, no lifetime manager</td><td>AddTransient (the IInvoicePdfRenderer registration)</td></tr>
+    <tr><td>HierarchicalLifetimeManager</td><td>Scoped: for a DbContext, AddDbContext</td></tr>
+    <tr><td>ContainerControlledLifetimeManager</td><td>AddSingleton</td></tr>
+    <tr><td>InjectionConstructor</td><td>A factory overload, or better: one public constructor</td></tr>
+    <tr><td>Named registrations</td><td>Keyed services (.NET 8): AddKeyedScoped + [FromKeyedServices]</td></tr>
+  </table>
+</section>
+
+<section id="add-db-context" data-part="4" data-cue="That's exactly what src/FeeBilling.Infrastructure/DependencyInjection.cs already does">
+  <h2>Already done for the new code</h2>
+  <div class="file">src/FeeBilling.Infrastructure/DependencyInjection.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">services.AddDbContext&lt;FeeBillingDbContext&gt;(options => options.UseSqlServer(connectionString));</pre>
+  <p class="muted">AddDbContext registers the context as scoped.</p>
+</section>
+
+<section id="not-built-in" data-part="4" data-cue="What doesn't the built-in container do?">
+  <h2>What the built-in container doesn't do</h2>
+  <div class="cols">
+    <ul>
+      <li>Property injection</li>
+      <li>Interception or decorators</li>
+      <li>Child containers</li>
+      <li>Convention-based assembly scanning</li>
+    </ul>
+    <div class="card modern"><h3>But it covers</h3><p>Constructor injection, three lifetimes, open generics, IEnumerable of a service, keyed services. Autofac only if you truly need more.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Lifetimes and scopes ───────────── -->
+<section id="lifetimes" data-part="5" data-cue="Lifetimes, captive dependencies and scopes outside a request">
+  <h2>Three lifetimes</h2>
+  <div class="cols3">
+    <div class="card"><h3>Singleton</h3><p>Whole application. <b>FeeEngine</b>: pure and stateless.</p></div>
+    <div class="card modern"><h3>Scoped</h3><p>One per scope; in a web app, per request. <b>FeeBillingDbContext</b>.</p></div>
+    <div class="card"><h3>Transient</h3><p>New every resolve. A small validator.</p></div>
+  </div>
+</section>
+
+<section id="captive" data-part="5" data-cue="The rule that follows is simple">
+  <h2>Captive dependencies</h2>
+  <p class="quote">Depend only on things that live <span class="accent">as long as you do, or longer</span>.</p>
+  <div class="file" style="margin-top:44px">Sketch · the bug</div>
+  <pre class="code" data-lang="cs">// Registered as a singleton, so the first request's context lives forever.
+public sealed class ScheduleCache(FeeBillingDbContext db)</pre>
+  <p class="small muted">Outlives its request · shared across threads · tracks stale entities</p>
+</section>
+
+<section id="scope-validation" data-part="5" data-cue="The built-in container can catch this">
+  <h2>Let scope validation prove it</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Development</h3><p>ValidateScopes and ValidateOnBuild on by default: startup throws "cannot consume scoped service from singleton".</p></div>
+    <div class="card legacy"><h3 class="amber">Production</h3><p>Off by default: the app starts, and the bug ships.</p></div>
+  </div>
+  <p style="margin-top:36px">Run integration tests in Development. <span class="amber">Never disable validation</span> to make the error go away.</p>
+</section>
+
+<section id="background-scope" data-part="5" data-cue="Now, scopes outside a request">
+  <h2>A scope per unit of work</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,6,7">public sealed class BillingRunPoller(IServiceScopeFactory scopes) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        // For each poll of the billing run queue:
+        await using var scope = scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService&lt;FeeBillingDbContext&gt;();
+        // … do the work; the scope disposes the context
+    }
+}</pre>
+  <p class="small muted">A hosted service is effectively a singleton: never inject the DbContext into its constructor.</p>
+</section>
+
+<section id="parallel" data-part="5" data-cue="Parallel work needs one more tool">
+  <h2>Parallel work: a context per task</h2>
+  <div class="file">Sketch · target design (IDbContextFactory registered with AddDbContextFactory)</div>
+  <pre class="code tight" data-lang="cs" data-mark="4">var options = new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = stoppingToken };
+await Parallel.ForEachAsync(chunks, options, async (chunk, token) =>
+{
+    await using var db = await contexts.CreateDbContextAsync(token);
+    // … this task's own context
+});</pre>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">EF6</h3><p>Not thread-safe, and often didn't notice</p></div>
+    <div class="card modern"><h3>EF Core</h3><p>Detects concurrent use and throws InvalidOperationException</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Refactoring path ───────────── -->
+<template id="path">
+  <h2>A path that doesn't break legacy</h2>
+  <div class="steps" style="grid-template-columns:1fr">
+    <div class="step item"><span class="num">1</span>Find out what HttpContext is used for: a DB context, the user name, a cache</div>
+    <div class="step item"><span class="num">2</span>Pass data explicitly: the edge reads it, services take parameters</div>
+    <div class="step item"><span class="num">3</span>Static → instance class with constructor dependencies, behind a thin static facade</div>
+  </div>
+</template>
+<section id="path-0" data-part="6" data-cue="A refactoring path that doesn't break legacy" data-template="path"></section>
+<section id="path-1" data-part="6" data-cue="Step one: find out what HttpContext is actually used for" data-template="path" data-highlight="1"></section>
+
+<section id="start-run" data-part="6" data-cue="BillingController.StartRun reads HttpContext.Current.User.Identity.Name">
+  <h2>The pattern already exists</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/BillingController.cs · the edge</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">var user = HttpContext.Current.User.Identity.Name;
+var runId = BillingRunService.Enqueue(req.FirmId, req.PeriodEnd, user);</pre>
+  <div class="file">legacy/FeeBilling.Core/BillingRunService.cs · the service</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">public static int Enqueue(int firmId, DateTime periodEnd, string requestedBy)</pre>
+  <p>The service never touches HttpContext. <span class="accent">Push that pattern everywhere.</span></p>
+</section>
+
+<section id="path-3" data-part="6" data-cue="Step three: turn a static class into an instance class" data-template="path" data-highlight="3"></section>
+
+<section id="choosing" data-part="6" data-cue="For choosing implementations">
+  <h2>Replacing the switch</h2>
+  <div class="file">legacy/FeeBilling.Core/BillingRunService.cs · CalculateAccountFee</div>
+  <pre class="code tight" data-lang="cs">switch (account.FeeSchedule.ScheduleType)
+{
+    case ScheduleTypes.Blended:
+        fee = BlendedFeeCalculator.CalculateQuarterlyFee(accountId, periodEnd);
+        break;
+    case ScheduleTypes.Flat:
+        fee = FlatFeeCalculator.CalculateQuarterlyFee(accountId, periodEnd);
+        break;
+    default:
+        fee = FeeCalculator.CalculateQuarterlyFee(accountId, periodEnd);
+        break;
+}</pre>
+  <p class="small">IEnumerable&lt;IFeeStrategy&gt;, each with a Handles property · or keyed services by schedule type</p>
+</section>
+
+<section id="bridge" data-part="6" data-cue="There's also a bridge worth knowing about">
+  <h2>A bridge, not the destination</h2>
+  <p>Microsoft.AspNetCore.SystemWebAdapters lets a <span class="accent">netstandard2.0</span> library compile against System.Web.HttpContext, so shared code keeps working in both hosts.</p>
+  <ul style="margin-top:20px">
+    <li>Check which members it supports</li>
+    <li>Use it to buy time</li>
+    <li class="amber">It keeps the coupling; it just makes it portable</li>
+  </ul>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<template id="traps">
+  <h2>Traps</h2>
+  <ul>
+    <li class="item">IHttpContextAccessor everywhere: same dependency, new name, still null in a worker</li>
+    <li class="item">Two contexts per request</li>
+    <li class="item">Resolving scoped services from the root provider</li>
+    <li class="item">Turning validation off to fix a startup error</li>
+    <li class="item">Sharing one context across Parallel.ForEach or Task.WhenAll</li>
+    <li class="item">Static loggers and static clocks</li>
+  </ul>
+</template>
+<section id="traps-1" data-part="7" data-cue="A few traps to call out." data-template="traps" data-highlight="1-3"></section>
+<section id="traps-2" data-part="7" data-cue="Turning validation off to fix a startup error" data-template="traps" data-highlight="4-6"></section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="8" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="8" data-cue="How do you remove HttpContext.Current from a codebase?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">How do you remove HttpContext.Current from a codebase?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="8" data-cue="First I find out what it's used for">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Find out what it's used for: DB context, user name, cache</li>
+    <li>Data (the user): read at the edge, pass as a parameter</li>
+    <li>Behaviour (context, clock, logger): constructor injection, right lifetime</li>
+    <li>IHttpContextAccessor only at the edge; SystemWebAdapters is a bridge</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="8" data-cue="What's a captive dependency?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">What's a captive dependency?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="8" data-cue="A longer-lived service holding a shorter-lived one">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>A longer-lived service holding a shorter-lived one</li>
+    <li>Singleton cache + scoped context: outlives the request, shared across threads</li>
+    <li>Scope validation catches it at startup (on by default in Development)</li>
+    <li>Never disable it to make the error go away</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="8" data-cue="How do you use a scoped DbContext from a background service?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">How do you use a scoped DbContext from a background service?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="8" data-cue="A BackgroundService is effectively a singleton, so I inject">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Inject IServiceScopeFactory; an async scope per unit of work</li>
+    <li>Resolve the context from the scope; dispose with it</li>
+    <li>Parallel work: IDbContextFactory, one context per task</li>
+    <li>Legacy shared one context in Parallel.ForEach; EF Core throws</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="8" data-cue="Would you keep Unity or Autofac, or use the built-in container?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">Would you keep Unity or Autofac, or use the built-in container?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="8" data-cue="The built-in container by default">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Built-in by default: constructor injection, lifetimes, open generics, IEnumerable, keyed</li>
+    <li>Autofac only for property injection, interception, child containers or scanning</li>
+    <li>Unity mapping: none → transient · hierarchical → scoped · container-controlled → singleton</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="8" data-cue="Why were the legacy fee calculators static, and why does that matter?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">Why were the legacy fee calculators static, and why does that matter?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="8" data-cue="Because a static class can't receive constructor dependencies">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Static classes can't take constructor dependencies, so they reached for ambient state</li>
+    <li>Untestable without a database and a web request</li>
+    <li>Forced the Windows Service to fake HttpContext on every thread</li>
+    <li>Unsafe in parallel; instance classes with explicit dependencies fix it</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Ambient state is a hidden parameter: HttpContext.Current, static caches, loggers, DateTime.Now.</li>
+    <li class="item">DbContextFactory.Current explains the statics, the three fake contexts, and two contexts per request.</li>
+    <li class="item">Map Unity by lifetime: transient, scoped, singleton, keyed. Autofac only if needed.</li>
+    <li class="item">Depend only on things that live at least as long as you. Let scope validation prove it.</li>
+    <li class="item">Outside a request: IServiceScopeFactory per unit of work; IDbContextFactory per parallel task.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="9" data-cue="Five things to remember" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="9" data-cue="One: ambient state is a hidden parameter" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="9" data-cue="Two: in FeeBilling" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="9" data-cue="Three: map Unity onto the built-in container" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="9" data-cue="Four: a service may depend only on things" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="9" data-cue="Five: outside a request" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="9" data-cue="In the next lesson">
+  <div class="kicker">Next</div>
+  <h1>09 · YARP Gateway and Incremental Routing</h1>
+  <p class="lead">How YARP routes one path at a time, and how you roll a route back.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

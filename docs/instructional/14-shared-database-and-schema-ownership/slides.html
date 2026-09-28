@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 14 Slides</title>
+<!--
+  Slides for the lesson 14 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="14" data-lesson-title="Shared Database and Schema Ownership" data-parts="Introduction|The questions|Three models, zero owners|Why sharing was right|Choosing an owner|Baselining|Expand and contract|Deploying migrations|Procedures and reporting|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 14</div>
+  <h1>Shared Database and<br>Schema Ownership</h1>
+  <p class="lead">An old app and a new app share one database. Who changes the schema, and how?</p>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>Two ORMs share one schema: who owns changes?</li>
+    <li>How do you change a schema that an old app and a new app both use?</li>
+    <li>Should the application run its migrations on startup?</li>
+    <li>How do you know whether a stored procedure is still used?</li>
+    <li>When do you finally split the shared database?</li>
+  </ul>
+</section>
+
+<section id="thesis" data-part="1" data-cue="Keep the thesis from lesson one in mind">
+  <div class="kicker">Why it matters</div>
+  <p class="quote">The schema is <span class="accent">the contract</span> between the old system and the new one.</p>
+  <p class="muted" style="margin-top:48px">Every schema change during a migration is a contract change. Treat it like a public API change.</p>
+</section>
+
+<!-- ───────────── Three models ───────────── -->
+<section id="schema-header" data-part="2" data-cue="Three models, two databases, zero owners">
+  <h2>Two models, and nobody owns them</h2>
+  <div class="file">database/billing/001-schema.sql</div>
+  <pre class="code tight" data-lang="sql" data-mark="4,5,6,7,8">/*
+    FeeBilling schema (as found).
+
+    This DDL was reverse-engineered from production in 2019 and has been hand-maintained since.
+    It is described by TWO models today:
+      - legacy/FeeBilling.Data/FeeBilling.edmx          (EF6 Database-First)
+      - src/FeeBilling.Infrastructure (EF Core 10)      (partial: Firms, Households, Accounts)
+    Nobody has decided which of them owns schema changes. See docs/handover.md, issue #4.
+*/</pre>
+</section>
+
+<section id="reporting-context" data-part="2" data-cue="It's actually worse than two">
+  <h2>A third model: the reporting context</h2>
+  <div class="file">legacy/FeeBilling.Data/Reporting/ReportingEntities.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="5,6,11">/// &lt;summary&gt;
+/// Reporting database (FeeBillingReporting). Written by BillingRunner inside the same
+/// TransactionScope as the Invoices insert, which is why production needs MSDTC.
+///
+/// Code First against an existing database (the EDMX designer kept crashing on the
+/// second database, 2015).
+/// &lt;/summary&gt;
+public class ReportingEntities : DbContext
+{
+    static ReportingEntities()
+    {
+        Database.SetInitializer&lt;ReportingEntities&gt;(null);
+    }</pre>
+  <p class="small muted">A null initializer: EF6 never creates or changes that database. It maps the tables, but doesn't own them.</p>
+</section>
+
+<section id="which-file" data-part="2" data-cue="Now picture a developer who needs a new column tomorrow">
+  <h2>A new column tomorrow. Which file do you edit?</h2>
+  <div class="grid7">
+    <div class="card"><h3>001-schema.sql</h3><p>Hand-maintained DDL since 2019</p></div>
+    <div class="card legacy"><h3 class="amber">FeeBilling.edmx</h3><p>EF6 Database-First</p></div>
+    <div class="card modern"><h3>Infrastructure</h3><p>EF Core 10, partial model</p></div>
+    <div class="card legacy"><h3 class="amber">ReportingEntities</h3><p>EF6 Code First, second database</p></div>
+  </div>
+  <p style="margin-top:44px">Today: <span class="amber">all of them, by hand, and hope</span>.</p>
+  <p class="small muted">Handover issue #4: both the EDMX and the EF Core model describe the same tables, and no one decided who owns schema changes.</p>
+</section>
+
+<!-- ───────────── Why sharing was right ───────────── -->
+<section id="adr-0004" data-part="3" data-cue="Before criticizing the shared database">
+  <div class="file">docs/adr/0004-shared-database-during-transition.md · Decision</div>
+  <h2>Sharing was the right first move</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Rejected: database per service</h3><p>Needs data synchronization (CDC, dual writes or events) before anything useful ships.</p></div>
+    <div class="card modern"><h3>Chosen: share FeeBilling</h3><p>Map existing tables with EF Core, reverse-engineered with <span class="accent">dotnet ef dbcontext scaffold</span> and trimmed. Accounts.Api is read-only.</p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">The first endpoints shipped quickly, with no synchronization at all.</p>
+</section>
+
+<section id="adr-costs" data-part="3" data-cue="The ADR is also honest about the cost">
+  <div class="file">docs/adr/0004-shared-database-during-transition.md</div>
+  <pre class="code" data-lang="md" data-mark="3,4,5,9">## Consequences
+
+- Two models (the EDMX and EF Core) describe the same tables and can drift.
+- Any schema change can break the legacy app, the new services, or both.
+- Database-per-service is deferred, not abandoned.
+
+## Open questions
+
+- Who owns schema changes, and which model is the source of truth?</pre>
+  <p class="accent">This lesson answers that question.</p>
+</section>
+
+<section id="drift" data-part="3" data-cue="Drift isn't hypothetical in this repository">
+  <h2>Drift, already in the repository</h2>
+  <div class="file">src/FeeBilling.Infrastructure/Persistence/Configurations/FeeTierConfiguration.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1">entity.Property(e => e.AnnualRate).HasPrecision(18, 2);</pre>
+  <div class="file">database/billing/001-schema.sql</div>
+  <pre class="code" data-lang="sql" data-mark="1">AnnualRate      decimal(9,6)    NOT NULL,       -- 0.007500 = 0.75%</pre>
+  <p>A rate of <span class="accent">0.0075</span> would be written as <span class="amber">0.01</span>. Nothing detects it, because nothing writes fee tiers yet.</p>
+</section>
+
+<!-- ───────────── Choosing an owner ───────────── -->
+<template id="owners">
+  <h2>Who owns the schema?</h2>
+  <div class="cols3">
+    <div class="card item"><h3>1 · SQL scripts</h3><p>DBA-owned, with DbUp or an SQL Server Data Tools project. Legitimate where a strong DBA team exists.</p></div>
+    <div class="card item"><h3>2 · The EDMX</h3><p>The oldest model, but Database-First never owned the schema. It was generated <em>from</em> it.</p></div>
+    <div class="card item"><h3>3 · EF Core migrations</h3><p>Change ships in the same PR as the code, reviewed and versioned. One tool for new work. The EDMX goes read-only.</p></div>
+  </div>
+</template>
+<section id="owners-0" data-part="4" data-cue="There are three realistic options" data-template="owners"></section>
+<section id="owners-1" data-part="4" data-cue="Option one: a DBA-owned set of SQL scripts" data-template="owners" data-highlight="1"></section>
+<section id="owners-2" data-part="4" data-cue="Option two: the EDMX" data-template="owners" data-highlight="2"></section>
+
+<section id="edmx-reader" data-part="4" data-cue="You can see that in legacy/FeeBilling.Data/Model/FeeBilling.Context.cs">
+  <h2>Database-First reads the schema, never writes it</h2>
+  <div class="file">legacy/FeeBilling.Data/Model/FeeBilling.Context.cs</div>
+  <pre class="code" data-lang="cs" data-mark="9">public partial class FeeBillingEntities : DbContext
+{
+    public FeeBillingEntities()
+        : base("name=FeeBillingEntities")
+    {
+    }
+
+    protected override void OnModelCreating(DbModelBuilder modelBuilder)
+    {
+        throw new UnintentionalCodeFirstException();
+    }</pre>
+</section>
+
+<section id="owners-3" data-part="4" data-cue="Option three, and the recommendation" data-template="owners" data-highlight="3"></section>
+
+<section id="veto" data-part="4" data-cue="Then add the rule that makes this safe">
+  <div class="kicker">The rule while legacy runs</div>
+  <p class="quote">EF Core owns the schema, but <span class="amber">legacy still has a veto</span>.</p>
+  <p class="muted" style="margin-top:48px">Every change stays backward compatible with the legacy application until legacy is retired.</p>
+</section>
+
+<section id="new-adr" data-part="4" data-cue="Write all of that down as a new ADR">
+  <h2>Answer ADR-0004 in a new ADR</h2>
+  <ul class="checks">
+    <li>The owner: EF Core migrations</li>
+    <li>The tool, and how the EDMX is regenerated (read-only)</li>
+    <li>The review rule: schema changes reviewed like code</li>
+    <li>How migrations are deployed</li>
+    <li>The expand and contract rule</li>
+  </ul>
+  <p class="muted" style="margin-top:28px">Not in a chat thread.</p>
+</section>
+
+<!-- ───────────── Baselining ───────────── -->
+<section id="baseline-problem" data-part="5" data-cue="Here's the practical problem">
+  <h2>Migrations assume they built the database</h2>
+  <p>Ours was built by SQL scripts years ago.</p>
+  <p class="accent">How do you start using migrations without recreating anything?</p>
+</section>
+
+<section id="baseline" data-part="5" data-cue="You create a baseline migration and empty it">
+  <h2>An empty baseline migration</h2>
+  <pre class="code tight" data-lang="sh">dotnet ef migrations add Baseline \
+    --project src/FeeBilling.Infrastructure \
+    --startup-project src/FeeBilling.Accounts.Api</pre>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="cs" data-mark="3">public partial class Baseline : Migration
+{
+    // The schema already exists (database/billing/*.sql). This migration only records that fact.
+    protected override void Up(MigrationBuilder migrationBuilder) { }
+
+    protected override void Down(MigrationBuilder migrationBuilder) { }
+}</pre>
+</section>
+
+<section id="baseline-apply" data-part="5" data-cue="When you apply it to an existing environment">
+  <h2>Applying the baseline</h2>
+  <ol>
+    <li>EF Core creates <span class="accent">__EFMigrationsHistory</span> if it doesn't exist</li>
+    <li>It inserts <b>one row</b> for the baseline</li>
+    <li><span class="amber">No other DDL runs</span></li>
+  </ol>
+  <p class="muted" style="margin-top:28px">Every later migration is a real, reviewed change on top of the as-found schema.</p>
+</section>
+
+<section id="dbinit" data-part="5" data-cue="For fresh development and test databases">
+  <h2>Fresh databases start from the real schema</h2>
+  <p>tools/FeeBilling.DbInit builds the as-found schema from the SQL scripts; migrations run on top.</p>
+  <div class="file">tests/FeeBilling.Accounts.Api.Tests/Infrastructure/AccountsApiFixture.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="2">var master = await WaitForLoginAsync(_sql.GetConnectionString());
+await SqlScriptRunner.ApplyAllAsync(master, SqlScriptRunner.FindDatabaseDirectory(AppContext.BaseDirectory));</pre>
+  <p class="small muted">Tests exercise the real schema, not EF Core's idea of it.</p>
+</section>
+
+<section id="snapshot-trap" data-part="5" data-cue="Now the trap, and it's a good one to mention">
+  <h2>EF Core never looks at the live database</h2>
+  <svg width="1640" height="400" viewBox="0 0 1640 400">
+    <defs><marker id="arrow14a" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#38bdf8"/></marker>
+    <marker id="arrow14b" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#f5b544"/></marker></defs>
+    <rect x="0" y="120" width="420" height="120" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="210" y="172" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">EF Core model</text>
+    <text x="210" y="212" fill="#8ea2c0" font-size="24" text-anchor="middle">configurations in code</text>
+    <rect x="610" y="120" width="420" height="120" rx="18" fill="#121b2f" stroke="#38bdf8" stroke-width="3"/>
+    <text x="820" y="172" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Model snapshot</text>
+    <text x="820" y="212" fill="#8ea2c0" font-size="24" text-anchor="middle">what migrations last saw</text>
+    <rect x="1220" y="120" width="420" height="120" rx="18" fill="#221b0d" stroke="#f5b544" stroke-width="3"/>
+    <text x="1430" y="172" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Live database</text>
+    <text x="1430" y="212" fill="#8ea2c0" font-size="24" text-anchor="middle">the real columns</text>
+    <line x1="425" y1="180" x2="600" y2="180" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow14a)"/>
+    <text x="512" y="100" fill="#38bdf8" font-size="24" text-anchor="middle">migrations add</text>
+    <text x="512" y="70" fill="#38bdf8" font-size="24" text-anchor="middle">compared by</text>
+    <line x1="1035" y1="180" x2="1215" y2="180" stroke="#f87171" stroke-width="4" stroke-dasharray="12 10"/>
+    <text x="1125" y="100" fill="#f87171" font-size="24" text-anchor="middle">never compared</text>
+    <path d="M210,245 C210,360 1430,360 1430,252" fill="none" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow14b)"/>
+    <text x="820" y="392" fill="#f5b544" font-size="24" text-anchor="middle">drift test: INFORMATION_SCHEMA.COLUMNS vs EF metadata</text>
+  </svg>
+</section>
+
+<section id="snapshot-tables" data-part="5" data-cue="Today the snapshot only knows about Firms, Accounts and Households">
+  <h2>Map before you baseline</h2>
+  <div class="file">src/FeeBilling.Infrastructure/Persistence/FeeBillingDbContext.cs</div>
+  <pre class="code" data-lang="cs" data-mark="7,8">protected override void OnModelCreating(ModelBuilder modelBuilder)
+{
+    modelBuilder.ApplyConfiguration(new FirmConfiguration());
+    modelBuilder.ApplyConfiguration(new AccountConfiguration());
+    modelBuilder.ApplyConfiguration(new HouseholdConfiguration());
+
+    // Scaffolded, not wired yet. Billing.Api will need these:
+    //   modelBuilder.ApplyConfiguration(new FeeScheduleConfiguration());
+    //   modelBuilder.ApplyConfiguration(new FeeTierConfiguration());
+}</pre>
+  <p class="small">Wire these in after the baseline and the next migration creates <span class="amber">FeeTiers</span>, a table that already exists.</p>
+</section>
+
+<section id="drift-test" data-part="5" data-cue="The same blind spot explains why migrations can't catch">
+  <h2>A drift test catches what migrations can't</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="10">// For every mapped property, compare EF Core's metadata with the real column.
+var columns = await LoadColumnsAsync(connection);   // INFORMATION_SCHEMA.COLUMNS
+foreach (var entity in db.Model.GetEntityTypes())
+foreach (var property in entity.GetProperties())
+{
+    var column = columns[(entity.GetTableName(), property.GetColumnName())];
+    Assert.Equal(column.Precision, property.GetPrecision());
+    Assert.Equal(column.Scale, property.GetScale());
+}
+// FeeTiers.AnnualRate: database 9,6 · mapped 18,2 · fails until the mapping is fixed</pre>
+  <p class="accent small">On this repository it fails on the annual rate. That's exactly what you want.</p>
+</section>
+
+<!-- ───────────── Expand and contract ───────────── -->
+<section id="ec-intro" data-part="6" data-cue="The technique is called expand and contract, or parallel change">
+  <div class="kicker">Parallel change</div>
+  <p class="quote">Never change a shape in place. Add the new shape <span class="accent">next to</span> the old one, move everyone across, <span class="amber">then</span> remove the old shape.</p>
+</section>
+
+<section id="ec-steps" data-part="6" data-cue="It has five steps">
+  <h2>Expand and contract: five steps</h2>
+  <ol>
+    <li><b>Expand</b> <span class="muted">· add the new column or table, nullable; nothing notices</span></li>
+    <li><b>Backfill</b> <span class="muted">· copy existing data into the new shape, in batches</span></li>
+    <li><b>Dual write</b> <span class="muted">· keep both shapes current, from the app or a trigger</span></li>
+    <li><b>Switch reads</b> <span class="muted">· point the new code at the new shape</span></li>
+    <li><b>Contract</b> <span class="muted">· remove the old shape once no consumer needs it</span></li>
+  </ol>
+  <p class="small amber" style="margin-top:20px">During a strangler fig, "contract" usually means after legacy is retired.</p>
+</section>
+
+<section id="ec-idempotency" data-part="6" data-cue="The first is additive and safe">
+  <h2>Example 1: additive and safe</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="sql" data-mark="1,3">ALTER TABLE dbo.BillingRunQueue ADD IdempotencyKey varchar(64) NULL;
+
+CREATE UNIQUE INDEX UX_BillingRunQueue_IdempotencyKey
+    ON dbo.BillingRunQueue (IdempotencyKey) WHERE IdempotencyKey IS NOT NULL;</pre>
+  <ul>
+    <li>EF6 Database-First selects only the columns in its storage model: <span class="accent">invisible to legacy</span></li>
+    <li>usp_EnqueueBillingRun keeps inserting rows without a key; the filtered index ignores them</li>
+    <li>No contract step: the column stays</li>
+  </ul>
+</section>
+
+<section id="ec-quoted-identifier" data-part="6" data-cue="One caveat to check on the real server before shipping">
+  <h2>Check before shipping</h2>
+  <p>Writing to a table with a <span class="accent">filtered index</span> requires the quoted identifier setting to be on.</p>
+  <p class="muted">A stored procedure keeps the setting it was created with, so check usp_EnqueueBillingRun first.</p>
+</section>
+
+<section id="ec-lastvaluedat" data-part="6" data-cue="The second example needs all five steps">
+  <h2>Example 2: needs all five steps</h2>
+  <div class="file">database/billing/001-schema.sql · dbo.Accounts</div>
+  <pre class="code" data-lang="sql" data-mark="1">LastValuedAt    datetime2(0)    NULL,           -- written by the nightly valuation job, in UTC</pre>
+  <p>The type doesn't say UTC. That's the root of <span class="amber">handover issue #3</span>: dates come back with an unspecified kind, and the browser treats them as local time.</p>
+  <p class="muted small">Changing the type in place would break the EDMX, which expects a plain DateTime.</p>
+</section>
+
+<section id="ec-lastvaluedat-steps" data-part="6" data-cue="So: expand, by adding a new nullable date time offset column">
+  <h2>LastValuedAt → a datetimeoffset column</h2>
+  <ol>
+    <li><b>Expand</b> <span class="muted">· new nullable datetimeoffset column, UTC in its name</span></li>
+    <li><b>Backfill</b> <span class="muted">· from the old column, in batches</span></li>
+    <li><b>Dual write</b> <span class="muted">· the valuation job writes both columns</span></li>
+    <li><b>Switch reads</b> <span class="muted">· EF Core maps the new column; new APIs read it</span></li>
+    <li><b>Contract</b> <span class="muted">· drop the old column after legacy and the EDMX are gone</span></li>
+  </ol>
+  <p class="small accent" style="margin-top:20px">Legacy notices none of this. The drop goes on the decommissioning checklist.</p>
+</section>
+
+<section id="ec-rules" data-part="6" data-cue="Two rules fall out of this">
+  <h2>Two rules</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Never rename or drop in one step</h3><p>EF Core happily generates a valid rename-column migration. Legacy breaks on its next query.</p></div>
+    <div class="card legacy"><h3 class="amber">Never add NOT NULL without a default</h3><p>Legacy inserts don't know the column exists, and they fail.</p></div>
+  </div>
+</section>
+
+<section id="ec-behaviour" data-part="6" data-cue="Watch for one more subtle case">
+  <h2>A schema change that's really a behaviour change</h2>
+  <div class="file">Sketch · a unique index across firm and period end</div>
+  <pre class="code" data-lang="sql">CREATE UNIQUE INDEX UX_BillingRunQueue_Firm_Period ON dbo.BillingRunQueue (FirmId, PeriodEnd);</pre>
+  <ul>
+    <li>Legacy's double-click now <span class="amber">throws an error</span> instead of creating a second run</li>
+    <li>Legacy behaviour changed through the database: it needs the same sign-off as a code change</li>
+    <li>If duplicate rows already exist, the index won't even create</li>
+  </ul>
+</section>
+
+<!-- ───────────── Deploying migrations ───────────── -->
+<section id="deploy-startup" data-part="7" data-cue="How do migrations reach production?">
+  <h2>Migrations at startup?</h2>
+  <pre class="code" data-lang="cs">db.Database.Migrate();   // on application start</pre>
+  <p class="amber">In a multi-instance or regulated deployment: don't.</p>
+</section>
+
+<section id="deploy-why-not" data-part="7" data-cue="The application's SQL login would need permission to change the schema">
+  <h2>Why not at startup</h2>
+  <ul>
+    <li>The app's SQL login needs DDL rights: <span class="amber">breaks least privilege</span></li>
+    <li>Instances starting at once race each other <span class="muted small">(newer EF Core takes a lock; check your version)</span></li>
+    <li>A failed migration takes the app down mid-rollout</li>
+    <li>Nobody reviewed the SQL that ran against production</li>
+  </ul>
+</section>
+
+<section id="deploy-pipeline" data-part="7" data-cue="Instead, generate the SQL and review it">
+  <h2>Generate, review, run in the pipeline</h2>
+  <pre class="code" data-lang="sh">dotnet ef migrations script --idempotent --output migrate.sql
+dotnet ef migrations bundle --output efbundle</pre>
+  <div class="cols3">
+    <div class="card"><h3>1 · Pull request</h3><p>The SQL is reviewed with the code.</p></div>
+    <div class="card"><h3>2 · Pipeline step</h3><p>Script or bundle runs with an <span class="amber">elevated</span> login.</p></div>
+    <div class="card modern"><h3>3 · Deploy the app</h3><p>Its login reads and writes data, but can't change the schema.</p></div>
+  </div>
+</section>
+
+<section id="deploy-dbinit" data-part="7" data-cue="DbInit, by the way, is for development and test only">
+  <h2>tools/FeeBilling.DbInit</h2>
+  <p>Development and test only.</p>
+  <p class="amber">Not a production deployment tool.</p>
+</section>
+
+<!-- ───────────── Procedures and reporting ───────────── -->
+<section id="procs" data-part="8" data-cue="Ownership also covers the fourteen stored procedures">
+  <h2>Fourteen stored procedures</h2>
+  <div class="file">database/billing/002-stored-procedures.sql</div>
+  <pre class="code tight" data-lang="sql" data-mark="5,6">/*
+    The 14 stored procedures called by the legacy code, either through EF6 Database.SqlQuery
+    or through ADO.NET SqlDataAdapter.
+
+    Some are hot paths (called once per account per billing run). Some are called from one screen.
+    One or two may not be called at all any more. Nobody has checked which is which.
+*/</pre>
+</section>
+
+<section id="procs-grep" data-part="8" data-cue="Start with the repository">
+  <h2>What the repository calls: 6 of 14</h2>
+  <pre class="code" data-lang="sh">git grep -n "usp_" -- legacy src</pre>
+  <div class="cols">
+    <ul class="small">
+      <li>usp_GetBillableAum</li>
+      <li>usp_EnqueueBillingRun</li>
+      <li>usp_GetInvoicesForRun</li>
+      <li>usp_ReconcileFeeDebits</li>
+      <li>usp_UpsertPosition</li>
+      <li>usp_ValidateUser</li>
+    </ul>
+    <div class="card legacy"><h3 class="amber">Not in this repository</h3><p>Reports, SQL Agent jobs, the month-end export tool, the FeedProcessor scheduled task on APP01.</p></div>
+  </div>
+</section>
+
+<section id="procs-ask-db" data-part="8" data-cue="So ask the database">
+  <h2>Ask the database</h2>
+  <div class="file">Sketch · execution counts since the plan was cached</div>
+  <pre class="code tight" data-lang="sql">SELECT OBJECT_NAME(object_id, database_id) AS ProcedureName, execution_count, last_execution_time
+FROM sys.dm_exec_procedure_stats
+WHERE database_id = DB_ID('FeeBilling');</pre>
+  <ul>
+    <li>Query Store: history that survives a restart</li>
+    <li>Or an Extended Events session</li>
+    <li>Observe a <span class="amber">full billing cycle</span>: quarter-end jobs run once a quarter</li>
+  </ul>
+</section>
+
+<section id="reporting-db" data-part="8" data-cue="Then there's the reporting database">
+  <h2>The reporting database: a second owner problem</h2>
+  <div class="file">database/reporting/001-schema.sql</div>
+  <pre class="code" data-lang="sql" data-mark="4,5">/*
+    FeeBillingReporting schema.
+
+    FeeFacts is populated by the legacy BillingRunner in the SAME TransactionScope that writes
+    Invoices to the FeeBilling database. Two connections in one scope = MSDTC promotion.
+*/</pre>
+  <p class="small muted">The team that understands it was reassigned to the Reporting platform. MSDTC is lesson 16.</p>
+</section>
+
+<template id="split-path">
+  <h2>Database per service: deferred, not abandoned</h2>
+  <div class="steps">
+    <div class="step item"><span class="num">1</span>Table-by-table ownership map</div>
+    <div class="step item"><span class="num">2</span>A schema and SQL login per service</div>
+    <div class="step item"><span class="num">3</span>Views as contracts between services</div>
+    <div class="step item"><span class="num">4</span>CDC or events to feed copies</div>
+  </div>
+  <p class="accent" style="margin-top:44px">Split when ownership is clear and no cross-service joins remain. Not before.</p>
+</template>
+<section id="split" data-part="8" data-cue="And finally, database per service" data-template="split-path"></section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="9" data-cue="A few traps to call out">
+  <h2>Traps</h2>
+  <ul class="small">
+    <li>Assuming the ORM will figure it out: migrations compare model and snapshot, never the live database</li>
+    <li>Mapping an existing table after the baseline: the next migration tries to create it</li>
+    <li>Renaming or dropping in one step</li>
+    <li>Adding NOT NULL without a default: legacy inserts fail</li>
+    <li>Treating a schema change as purely technical when it changes legacy behaviour</li>
+    <li>Running migrations at startup</li>
+    <li>Deleting procedures based on a repository search: observe a full quarter</li>
+    <li>Forgetting the reporting database: a third model with its own owner question</li>
+  </ul>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="10" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="10" data-cue="Two ORMs share one schema. Who owns changes?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">Two ORMs share one schema. Who owns changes?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="10" data-cue="Exactly one owner, and it's written down in an ADR">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Exactly one owner, written down in an ADR</li>
+    <li>EF Core migrations: same PR as the code, reviewed, versioned</li>
+    <li>The EDMX goes read-only, regenerated from the database</li>
+    <li>Backward compatible with legacy until it's retired</li>
+    <li>A drift test against the real column types</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="10" data-cue="How do you change a schema that an old app and a new app both use?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">How do you change a schema that an old app and a new app both use?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="10" data-cue="Expand and contract. Add the new shape">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Expand, backfill, dual write, switch reads, contract</li>
+    <li>Drop the old shape only after legacy is gone</li>
+    <li>Never rename or drop in one step; never NOT NULL without a default</li>
+    <li>Additive, nullable changes are invisible to EF6 Database-First</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="10" data-cue="Should the application run migrations on startup?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">Should the application run migrations on startup?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="10" data-cue="Not in a multi-instance or regulated deployment">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Not in a multi-instance or regulated deployment</li>
+    <li>DDL rights for the app, races, failed rollouts, unreviewed SQL</li>
+    <li>Idempotent script or migration bundle, reviewed in the PR</li>
+    <li>A pipeline step with an elevated login; the app runs least-privilege</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="10" data-cue="How do you know whether a stored procedure is still used?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">How do you know whether a stored procedure is still used?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="10" data-cue="The repository only shows what the repository calls. In FeeBilling">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>The repository only shows what the repository calls: 6 of 14</li>
+    <li>Reports, agent jobs and scheduled tasks live elsewhere</li>
+    <li>Procedure stats view, Query Store or Extended Events</li>
+    <li>Observe a full billing cycle</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="10" data-cue="When do you split the shared database?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">When do you split the shared database?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="10" data-cue="When ownership is clear table by table">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>When ownership is clear and no cross-service joins remain</li>
+    <li>Ownership map → schema and login per service → views as contracts → CDC or events</li>
+    <li>Sharing was right for the first slices: no synchronization</li>
+    <li>Deferred, not abandoned</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Three models (EDMX, EF Core, reporting context) and no owner. Answer ADR-0004 in a new ADR.</li>
+    <li class="item">EF Core migrations own the schema; the EDMX is read-only; legacy keeps a veto.</li>
+    <li class="item">Baseline with an empty migration. EF compares model and snapshot, never the live DB: add a drift test.</li>
+    <li class="item">Expand, backfill, dual write, switch reads, contract. No one-step renames or drops.</li>
+    <li class="item">Deploy migrations from the pipeline; prove a procedure unused by watching a full quarter.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="11" data-cue="Five things to remember from this lesson" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="11" data-cue="One: FeeBilling's schema is described by three models" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="11" data-cue="Two: make EF Core migrations the owner" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="11" data-cue="Three: baseline an existing database" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="11" data-cue="Four: expand, backfill, dual write" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="11" data-cue="Five: deploy migrations as a reviewed script" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="11" data-cue="In the next lesson">
+  <div class="kicker">Next</div>
+  <h1>15 · Windows Service to Worker Service</h1>
+  <p class="lead">Replace the billing runner's Windows Service, and make a billing run resumable instead of all or nothing.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

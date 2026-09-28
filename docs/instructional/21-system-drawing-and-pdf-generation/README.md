@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** none directly (Invoicing is outside WP-01 to WP-10, but blocks containerization) · **Prerequisites:** 02, 03, 18
 
-**Audio lesson:** [21-system-drawing-and-pdf-generation.mp3](21-system-drawing-and-pdf-generation.mp3) · [Transcript](script.md)
+**Video:** [21-system-drawing-and-pdf-generation.mp4](21-system-drawing-and-pdf-generation.mp4) · [Slides](slides.html) · **Audio lesson:** [21-system-drawing-and-pdf-generation.mp3](21-system-drawing-and-pdf-generation.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

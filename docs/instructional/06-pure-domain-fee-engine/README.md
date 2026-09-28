@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-02 · **Prerequisites:** 04, 05
 
-**Audio lesson:** [06-pure-domain-fee-engine.mp3](06-pure-domain-fee-engine.mp3) · [Transcript](script.md)
+**Video:** [06-pure-domain-fee-engine.mp4](06-pure-domain-fee-engine.mp4) · [Slides](slides.html) · **Audio lesson:** [06-pure-domain-fee-engine.mp3](06-pure-domain-fee-engine.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

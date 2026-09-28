@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-06 · **Prerequisites:** 01, 13
 
-**Audio lesson:** [14-shared-database-and-schema-ownership.mp3](14-shared-database-and-schema-ownership.mp3) · [Transcript](script.md)
+**Video:** [14-shared-database-and-schema-ownership.mp4](14-shared-database-and-schema-ownership.mp4) · [Slides](slides.html) · **Audio lesson:** [14-shared-database-and-schema-ownership.mp3](14-shared-database-and-schema-ownership.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

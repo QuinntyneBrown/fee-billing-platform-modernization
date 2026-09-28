@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 04 Slides</title>
+<!--
+  Slides for the lesson 04 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="04" data-lesson-title="Golden-Master Characterization Testing" data-parts="Introduction|The questions|Untrusted tests|Golden master|The legacy runner|Quirks to capture|Modern side|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 04</div>
+  <h1>Golden-Master<br>Characterization Testing</h1>
+  <p class="lead">How do you know the new system is correct? Today, honestly: we don't.</p>
+</section>
+
+<section id="safety-net" data-part="0" data-cue="In this lesson, we'll build the safety net">
+  <h2>The safety net, before any fee logic moves</h2>
+  <div class="cols3">
+    <div class="card"><h3>1 · Run</h3><p>The legacy fee engine, exactly as it is</p></div>
+    <div class="card"><h3>2 · Capture</h3><p>Its output, as a golden master</p></div>
+    <div class="card"><h3>3 · Fail</h3><p>The build, on any difference nobody can explain</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>How do you know the new system is correct?</li>
+    <li>How do you test code that has no tests and can't be unit tested?</li>
+    <li>What's a golden master?</li>
+    <li>The new engine is a cent off on seven accounts: what do you do?</li>
+    <li>Why not just fix the failing legacy tests?</li>
+  </ul>
+</section>
+
+<section id="the-spec" data-part="1" data-cue="The sentence to hold on to is short">
+  <p class="quote">Legacy output is <span class="accent">the specification</span>.</p>
+  <p class="muted" style="margin-top:40px">Not your opinion, not the documentation, not the fee agreement. What clients were actually billed.</p>
+</section>
+
+<!-- ───────────── Untrusted tests ───────────── -->
+<section id="test-suite" data-part="2" data-cue="Start with what FeeBilling has today">
+  <h2>legacy/FeeBilling.Tests</h2>
+  <p><span class="accent">61</span> tests · <span class="green">30 pass</span> · <span class="red">9 fail</span> · <span class="amber">22 ignored</span></p>
+  <div class="file">.github/workflows/ci.yml</div>
+  <pre class="code" data-lang="yaml" data-mark="3,4">      - name: Test
+        run: dotnet test legacy/FeeBilling.Tests -c Release --no-build
+        # Known failures (9) and ignored tests (22). Nobody trusts this suite; it doesn't gate merges.
+        continue-on-error: true</pre>
+  <p class="muted">Handover: no parity tests exist for anything fee-related.</p>
+</section>
+
+<section id="fee-tests" data-part="2" data-cue="Open legacy/FeeBilling.Tests/Core/FeeCalculatorTests.cs">
+  <h2>Why the suite is in that state</h2>
+  <div class="file">legacy/FeeBilling.Tests/Core/FeeCalculatorTests.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1,3,7">// These need the FeeBilling database AND an HttpContext (FeeCalculator gets its DbContext
+// from HttpContext.Current.Items). The first three were un-ignored in 2019 to "get them
+// running again". They have been red since.
+[TestClass]
+public class FeeCalculatorTests
+{
+    private static readonly DateTime PeriodEnd = new DateTime(2016, 9, 30);</pre>
+  <p class="amber">Asserting fees for a quarter ten years ago, against whatever data is in the database.</p>
+</section>
+
+<section id="ignore-reasons" data-part="2" data-cue="Now search the test project for the ignore attributes">
+  <h2>Four ignore reasons, four design problems</h2>
+  <table>
+    <tr><th>Ignore reason</th><th>Design problem in legacy</th></tr>
+    <tr><td>"Needs FeeBilling database"</td><td>A hidden database dependency</td></tr>
+    <tr><td>"Flaky - cache from previous test"</td><td>A process-wide cache</td></tr>
+    <tr><td>"Depends on today's date"</td><td>A hidden clock</td></tr>
+    <tr><td>"GDI+ not available on the build server"</td><td>A Windows-only graphics library</td></tr>
+  </table>
+  <p class="muted" style="margin-top:32px">None can be fixed without changing legacy code, before its behaviour is captured.</p>
+</section>
+
+<section id="why-not-fix" data-part="2" data-cue="So, why not just fix the failing tests?">
+  <div class="kicker">Why not just fix the failing tests?</div>
+  <p class="quote">Making them pass proves nothing about <span class="accent">Q3 2026</span> invoices.</p>
+  <p class="muted" style="margin-top:40px">Leave them alone. Build the harness that does prove something.</p>
+</section>
+
+<!-- ───────────── Golden master ───────────── -->
+<section id="characterization" data-part="3" data-cue="A characterization test is a test that describes what code actually does">
+  <h2>Characterization test</h2>
+  <p class="lead">Describes what code <span class="accent">actually does</span>, not what someone thinks it should do.</p>
+  <ul style="margin-top:28px">
+    <li>Run the existing code on known inputs</li>
+    <li>Record the outputs</li>
+    <li>The recordings become the expected results</li>
+  </ul>
+  <p class="small muted" style="margin-top:24px">Michael Feathers, Working Effectively with Legacy Code</p>
+</section>
+
+<section id="golden-master" data-part="3" data-cue="A golden master is the recorded, reviewed output">
+  <h2>Golden master</h2>
+  <svg width="1640" height="380" viewBox="0 0 1640 380">
+    <defs><marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="130" width="300" height="120" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="150" y="182" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">Fixed inputs</text>
+    <text x="150" y="222" fill="#8ea2c0" font-size="24" text-anchor="middle">Q3 2026 seed data</text>
+    <path d="M305,165 C360,165 360,70 420,70" fill="none" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow)"/>
+    <path d="M305,215 C360,215 360,310 420,310" fill="none" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="430" y="10" width="420" height="120" rx="18" fill="#221b0d" stroke="#f5b544" stroke-width="3"/>
+    <text x="640" y="80" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">Legacy engine</text>
+    <rect x="430" y="250" width="420" height="120" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="640" y="320" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">New engine</text>
+    <line x1="855" y1="70" x2="970" y2="70" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="980" y="10" width="360" height="120" rx="18" fill="#121b2f" stroke="#f5b544" stroke-width="3"/>
+    <text x="1160" y="64" fill="#e8eef8" font-size="28" font-weight="600" text-anchor="middle">golden/q3-2026.csv</text>
+    <text x="1160" y="104" fill="#8ea2c0" font-size="24" text-anchor="middle">committed, reviewed</text>
+    <path d="M855,310 C1160,310 1160,250 1160,140" fill="none" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="1250" y="240" fill="#38bdf8" font-size="26">diff</text>
+    <rect x="1380" y="250" width="260" height="120" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="1510" y="302" fill="#e8eef8" font-size="26" text-anchor="middle">Any difference</text>
+    <text x="1510" y="340" fill="#f87171" font-size="26" text-anchor="middle">fails the build</text>
+  </svg>
+  <p class="muted" style="margin-top:24px">Any change to the golden file itself is a deliberate, reviewed act.</p>
+</section>
+
+<section id="seed-map" data-part="3" data-cue="For FeeBilling, the fixed input set is the Q3 2026 seed data">
+  <div class="file">database/seed/010-seed-q3-2026.sql</div>
+  <pre class="code tight" data-lang="sql" data-mark="11,12,13,15">Account -> scenario map
+  1001  S1   Mid-tier               $2,500,000            STD-TIERED
+  1002  S2   Exactly on boundary    $1,000,000            STD-TIERED
+  1003  S3   Minimum fee            $80,000               STD-TIERED
+  1004  S4   Blended                $2,500,000            STD-BLENDED
+  1005  S5   Flat                   $750,000              FLAT-500
+  1006  S6   Cash exclusion         $1,200,000 incl. $200,000 cash sleeve   STD-TIERED
+  1007  S7   Household H-100 / A    $1,500,000            (household HH-TIERED)
+  1008  S7   Household H-100 / B    $1,000,000            (household HH-TIERED)
+  1009  S7   Household H-100 / C    $500,000              (household HH-TIERED)
+  1010  S8   Household H-200 / A    $0                    (household HH-TIERED)
+  1011  S8   Household H-200 / B    $0                    (household HH-TIERED)
+  1012  S9   Opened 2026-08-15      $1,000,000            STD-TIERED
+  1013  S10  $3M on Jul 1, -$1.5M on Aug 31, $1.5M on Sep 30              STD-TIERED
+  2001-2500  S11  generated, deterministic, fractional-cent AUMs</pre>
+</section>
+
+<section id="record-inputs" data-part="3" data-cue="Here's a design choice that makes the modern side much simpler">
+  <h2>Record the inputs as well as the outputs</h2>
+  <ul>
+    <li>Billable AUM, schedule, household membership</li>
+    <li>The new engine's parity test reads its inputs from the golden file</li>
+    <li class="accent">No database needed on the modern side</li>
+  </ul>
+</section>
+
+<section id="golden-columns" data-part="3" data-cue="The training plan specifies the columns of the golden file">
+  <h2>golden/q3-2026.csv</h2>
+  <div class="file">Sketch · target design (illustrative rows: the runner records the real values)</div>
+  <pre class="code" data-lang="sh" data-mark="1">AccountId,ScheduleCode,BillableAum,Fee,HouseholdId,AllocatedFee,Outcome
+1001,STD-TIERED,2500000.00,5312.50,,,OK
+…
+1010,HH-TIERED,0.00,…,…,,DivideByZeroException</pre>
+  <ul class="small">
+    <li class="small">One row per account, sorted by AccountId, so diffs are readable</li>
+    <li class="small">Every seeded account has a row. A missing account is a runner bug</li>
+  </ul>
+</section>
+
+<section id="why-file" data-part="3" data-cue="Why a file, rather than assertions in code?">
+  <h2>Why a file?</h2>
+  <p>Because a file can be <span class="accent">reviewed</span>.</p>
+  <ul>
+    <li>A change to an invoice amount shows up as a one-line diff, next to the code that caused it</li>
+    <li>Evidence an auditor or compliance officer can actually read</li>
+  </ul>
+</section>
+
+<!-- ───────────── The legacy runner ───────────── -->
+<section id="runner" data-part="4" data-cue="The first half of the harness is a small console application">
+  <h2>tools/FeeBilling.ParityRunner.Legacy</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">net472 console app</h3><p>References legacy/FeeBilling.Core and runs the real code</p></div>
+    <div class="card"><h3>Doesn't exist yet</h3><p>Building it is work package one (WP-01)</p></div>
+  </div>
+</section>
+
+<section id="cant-run" data-part="4" data-cue="The problem is that the legacy engine can't run outside IIS">
+  <h2>The engine can't run outside IIS</h2>
+  <div class="file">legacy/FeeBilling.Data/DbContextFactory.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1,7">/// One FeeBillingEntities per HTTP request, stashed in HttpContext.Current.Items.
+// …
+public static FeeBillingEntities Current
+{
+    get
+    {
+        var items = HttpContext.Current.Items;</pre>
+  <p class="amber">No web request, no HttpContext: the calculator throws.</p>
+</section>
+
+<section id="seam" data-part="4" data-cue="The solution is a seam">
+  <h2>A seam: change the environment, not the code</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/FakeHttpContext.cs</div>
+  <pre class="code" data-lang="cs" data-mark="3,4,5,7">public static HttpContext Create()
+{
+    var request = new HttpRequest(string.Empty, "http://localhost/", string.Empty);
+    var response = new HttpResponse(new StringWriter());
+    var context = new HttpContext(request, response)
+    {
+        User = new GenericPrincipal(new GenericIdentity("BillingRunner"), new string[0])
+    };
+    return context;
+}</pre>
+</section>
+
+<section id="recipe" data-part="4" data-cue="Your runner copies that seam">
+  <h2>The recipe, from legacy/README.md</h2>
+  <ul class="checks">
+    <li>Reference FeeBilling.Core (net472) and System.Web</li>
+    <li>An App.config with the Entity Framework connection string</li>
+    <li><span class="accent">HttpContext.Current = FakeHttpContext.Create();</span> on the calling thread, before the first call</li>
+  </ul>
+  <p class="amber" style="margin-top:28px">HttpContext doesn't flow to other threads. Legacy code stays untouched.</p>
+</section>
+
+<section id="single-thread" data-part="4" data-cue="The billing runner learned that the hard way">
+  <h2>Learned the hard way: single-threaded runner</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/BillingRunnerService.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,3">Parallel.ForEach(accounts.Where(…), acct =>   // shared DbContext across threads
+{
+    HttpContext.Current = _fakeContext;   // FB-402: pool threads have no HttpContext either</pre>
+  <p>Your runner is single-threaded: <span class="accent">deterministic</span>, and plenty fast for seed data.</p>
+</section>
+
+<section id="orchestration" data-part="4" data-cue="Now the most important detail in this lesson: mirror the production orchestration exactly">
+  <div class="kicker">The most important detail</div>
+  <h2>Mirror the production orchestration</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/BillingRunnerService.cs · ProcessQueue</div>
+  <pre class="code tight" data-lang="cs" data-mark="4,6">Parallel.ForEach(accounts.Where(…), acct =>   // shared DbContext across threads
+{
+    // …
+    var fee = BillingRunService.CalculateAccountFee(acct.Id, run.PeriodEnd);
+// …
+if (ConfigurationManager.AppSettings["Feature.HouseholdBilling"] == "true")</pre>
+  <p class="amber">Not FeeCalculator.CalculateQuarterlyFee directly. Households only when the flag is the string "true".</p>
+</section>
+
+<section id="pro-rating-code" data-part="4" data-cue="Open legacy/FeeBilling.Core/BillingRunService.cs">
+  <div class="file">legacy/FeeBilling.Core/BillingRunService.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="5,9,10">public static decimal CalculateAccountFee(int accountId, DateTime periodEnd)
+{
+    // …
+
+    // FB-178: accounts opened during the quarter only pay for the days they were open.
+    var quarter = BillingPeriod.ForQuarterEnding(periodEnd);
+    if (account.OpenedOn > quarter.Start)
+    {
+        var daysOpen = (periodEnd - account.OpenedOn).Days;
+        fee = Math.Round(fee * daysOpen / 90m, 2);</pre>
+  <p class="small muted">Picks the blended, flat or tiered calculator by schedule type, then pro-rates.</p>
+  <p>Call the calculator directly and the golden master captures something <span class="amber">nobody was ever billed</span>.</p>
+</section>
+
+<section id="failure-as-data" data-part="4" data-cue="The runner also has to handle failure as data">
+  <h2>Failure is data</h2>
+  <ul>
+    <li>A calculation throws? Record the exception type, and keep going</li>
+    <li>An <b>Outcome</b> column: <span class="green">OK</span> or the exception type name</li>
+    <li>"Legacy throws" becomes an expected result the new system must match, or consciously change</li>
+  </ul>
+</section>
+
+<section id="culture" data-part="4" data-cue="And think about culture">
+  <h2>Two cultures, on purpose</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Calculate</h3><p>In the production culture, because that's how production behaves</p></div>
+    <div class="card modern"><h3>Write the file</h3><p>In the invariant culture</p></div>
+  </div>
+  <p style="margin-top:36px">A fr-CA laptop would write <span class="amber">5312,50</span> instead of <span class="accent">5312.50</span>, and the golden file changes for no reason.</p>
+</section>
+
+<!-- ───────────── Quirks to capture ───────────── -->
+<template id="quirks">
+  <h2>Capture it, don't fix it</h2>
+  <ol>
+    <li class="item">Pro-rating: ÷ 90 days, exclusive day count</li>
+    <li class="item">Per-tier rounding after ÷ 4</li>
+    <li class="item">Precision drift in double (S11)</li>
+    <li class="item">Flows: billed on period-end AUM (FB-212)</li>
+    <li class="item">Zero-AUM households divide by zero (S8)</li>
+    <li class="item">A 30-minute AUM cache keyed by a culture-dependent string</li>
+  </ol>
+</template>
+<section id="quirks-0" data-part="5" data-cue="Now some of the legacy behaviour your golden master will record" data-template="quirks"></section>
+<section id="quirks-1" data-part="5" data-cue="Pro-rating. CalculateAccountFee computes days open" data-template="quirks" data-highlight="1"></section>
+
+<section id="s9-math" data-part="5" data-cue="For S9, an account opened August 15">
+  <h2>S9: opened August 15, $1,000,000</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Legacy</h3><p>$2,500.00 × 46 ÷ 90</p><p><b>= $1,277.78</b></p></div>
+    <div class="card"><h3 class="muted">47 of 92 days</h3><p>$2,500.00 × 47 ÷ 92</p><p><b>= $1,277.17</b></p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">Put neither in the test. The golden master records whatever legacy produces; recomputing by hand is how you explain the difference later.</p>
+</section>
+
+<section id="quirks-2" data-part="5" data-cue="Per-tier rounding. Every tier is rounded separately" data-template="quirks" data-highlight="2"></section>
+<section id="quirks-3" data-part="5" data-cue="Precision drift. The five hundred generated accounts" data-template="quirks" data-highlight="3"></section>
+
+<section id="flows" data-part="5" data-cue="Flows. AumService.cs has a to-do tagged FB-212">
+  <h2>Flows: period-end AUM only (S10)</h2>
+  <div class="file">legacy/FeeBilling.Core/AumService.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1,2">// TODO FB-212: large mid-quarter flows should pro-rate. For now we bill on the
+// period-end market value only.</pre>
+</section>
+
+<section id="zero-aum" data-part="5" data-cue="Zero-AUM households. For S8">
+  <h2>Zero-AUM households (S8)</h2>
+  <div class="file">legacy/FeeBilling.Core/HouseholdAllocator.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="4,5">var total = members.Sum(m => m.BillableAum);
+return members.ToDictionary(
+    m => m.AccountId,
+    m => Math.Round(householdFee * m.BillableAum / total, 2, MidpointRounding.AwayFromZero));
+// Sum of allocations can differ from householdFee by ±0.01 × (n-1). Divide-by-zero if total == 0.</pre>
+  <p>The household fee is the minimum, then it throws. <span class="accent">Record it.</span></p>
+</section>
+
+<section id="cache" data-part="5" data-cue="And the cache.">
+  <h2>The cache</h2>
+  <div class="file">legacy/FeeBilling.Core/FeeCalculator.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,6">var cacheKey = "aum_" + accountId + "_" + periodEnd.ToShortDateString(); // culture-dependent key
+var aum = HttpRuntime.Cache[cacheKey] as double?;
+if (aum == null)
+{
+    aum = (double)AumService.GetBillableAum(accountId, periodEnd);
+    HttpRuntime.Cache.Insert(cacheKey, aum, null,
+        DateTime.Now.AddMinutes(30), Cache.NoSlidingExpiration); // local time
+}</pre>
+  <p class="amber">Fresh process, freshly seeded data, every golden generation.</p>
+</section>
+
+<!-- ───────────── Modern side ───────────── -->
+<section id="parity-tests" data-part="6" data-cue="The second half of the harness lives in the modern solution">
+  <h2>tests/FeeBilling.Parity.Tests</h2>
+  <ul>
+    <li><span class="accent">net10.0</span>, xUnit like the other modern tests</li>
+    <li>Loads the golden inputs</li>
+    <li>Runs the new engine with a <b>legacy policy preset</b></li>
+    <li>Compares each result with the recorded output</li>
+  </ul>
+</section>
+
+<section id="decimal-compare" data-part="6" data-cue="Compare as decimal, never as strings">
+  <h2>Compare as decimal, never as strings</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="cs" data-mark="4">decimal legacy = 5312.5m;    // double path, cast to decimal at the end
+decimal modern = 5312.50m;   // decimal path, rounded to two places
+legacy == modern;                          // true
+legacy.ToString() == modern.ToString();    // false: "5312.5" vs "5312.50"</pre>
+  <p class="muted">Write the file with a fixed two-decimal format, parse it back as decimal, compare numerically.</p>
+</section>
+
+<section id="parity-report" data-part="6" data-cue="The output is a parity report">
+  <h2>The parity report</h2>
+  <ul>
+    <li>A summary of exact matches</li>
+    <li>One row per difference: account, legacy value, new value, delta, <b>category</b></li>
+  </ul>
+  <div class="cols" style="margin-top:28px;grid-template-columns:repeat(4,1fr);gap:20px">
+    <div class="card"><p class="small">DOUBLE_PRECISION</p></div>
+    <div class="card"><p class="small">ROUNDING_MODE</p></div>
+    <div class="card"><p class="small">DAY_COUNT</p></div>
+    <div class="card"><p class="small">ALLOCATION_PENNY</p></div>
+  </div>
+</section>
+
+<section id="categorize" data-part="6" data-cue="How do you assign a category?">
+  <h2>Assign a category: one switch at a time</h2>
+  <table>
+    <tr><th>Switch back to legacy…</th><th>Difference disappears?</th></tr>
+    <tr><td>double arithmetic</td><td>DOUBLE_PRECISION</td></tr>
+    <tr><td>per-tier + banker's rounding</td><td>ROUNDING_MODE</td></tr>
+    <tr><td>divide by four</td><td>DAY_COUNT</td></tr>
+    <tr><td>proportional allocation</td><td>ALLOCATION_PENNY</td></tr>
+    <tr><td>none of them</td><td class="red">Unexplained: fails the build</td></tr>
+  </table>
+</section>
+
+<section id="allowlist" data-part="6" data-cue="Explained differences aren't automatically fine, either">
+  <h2>Explained isn't the same as fine</h2>
+  <ul>
+    <li>Each difference needs an entry in a <b>known-differences allowlist</b></li>
+    <li>Linked to an ADR or a ticket</li>
+    <li>With the legacy policy: <span class="accent">zero differences</span>, full stop</li>
+  </ul>
+</section>
+
+<section id="governance" data-part="6" data-cue="Finally, governance">
+  <h2>Governance</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="sh"># .github/CODEOWNERS
+/golden/   @billing-leads</pre>
+  <ul>
+    <li>Golden files are committed; changing one is a reviewed act</li>
+    <li>The legacy runner runs on Windows, only when someone deliberately regenerates</li>
+    <li>Parity tests run on <b>every pull request</b>, in the Linux job</li>
+  </ul>
+</section>
+
+<section id="regenerate" data-part="6" data-cue="When does the golden file legitimately change?">
+  <h2>When the golden file changes</h2>
+  <ol>
+    <li>Re-seed the database</li>
+    <li>Regenerate on Windows, in a fresh process</li>
+    <li>Review the diff line by line</li>
+  </ol>
+  <div class="cols" style="margin-top:28px">
+    <div class="card modern"><p>New rows for a new scenario: <span class="green">expected</span></p></div>
+    <div class="card legacy"><p>A change to an existing row: <span class="red">red flag</span>. Legacy didn't change.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="7" data-cue="Here are the traps.">
+  <h2>Traps</h2>
+  <ul>
+    <li>Refactoring legacy to make it testable first</li>
+    <li>Calling the fee calculator directly</li>
+    <li>Multithreading the runner</li>
+    <li>Letting the cache leak between runs</li>
+    <li>Current-culture golden files; comparing money as strings</li>
+    <li>Letting "legacy throws" crash the runner</li>
+    <li>Accepting golden-file changes in one big unexplained diff</li>
+  </ul>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="8" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="8" data-cue="How do you know the new system is correct?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">How do you know the new system is correct?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="8" data-cue="Three layers. Golden-master tests on the fee engine">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Golden-master tests on the fee engine</li>
+    <li>Contract tests on the APIs</li>
+    <li>Shadow runs in production for a full billing cycle</li>
+    <li>Every difference fixed, or accepted with sign-off and a reason</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="8" data-cue="How do you test code that has no tests and can't be unit tested?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">How do you test code that has no tests and can't be unit tested?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="8" data-cue="Characterization tests. I find the narrowest seam">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Characterization tests</li>
+    <li>The narrowest seam that runs the code unchanged: FeeBilling's fake HttpContext</li>
+    <li>Known inputs in, recorded outputs become the expected results</li>
+    <li>No refactoring first: I'd be measuring my changes</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="8" data-cue="What's a golden master?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">What's a golden master?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="8" data-cue="A recorded, reviewed output of the current system">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Recorded, reviewed output of the current system for a fixed input set</li>
+    <li>Differences fail the build unless categorized and allowlisted with an ADR</li>
+    <li>Golden-file changes reviewed, e.g. through code owners</li>
+    <li>Inputs recorded too: no database in the modern test</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="8" data-cue="The new engine differs from legacy by one cent on seven accounts. What do you do?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">The new engine differs from legacy by one cent on seven accounts. What do you do?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="8" data-cue="Categorize each difference by switching one policy dimension">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Categorize: one policy dimension back to legacy at a time</li>
+    <li>Legacy policy target is zero: fix the engine until it matches</li>
+    <li>Intended changes: allowlist, ADR, dollar impact per firm, sign-off</li>
+    <li>Ship separately, behind a flag</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="8" data-cue="Why not just fix the failing legacy tests?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">Why not just fix the failing legacy tests?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="8" data-cue="Because they assert 2016 data">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>They assert 2016 data and need a database and an HttpContext</li>
+    <li>Some share a process-wide cache; some depend on today's date</li>
+    <li>Passing proves nothing about this quarter's invoices</li>
+    <li>Fixing them changes legacy before its behaviour is captured</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Legacy output is the specification: what clients were actually billed, bugs included.</li>
+    <li class="item">A seam, not a refactor: the fake HttpContext in a single-threaded net472 runner.</li>
+    <li class="item">Mirror the production orchestration: pro-rating and households live outside the calculator.</li>
+    <li class="item">Invariant-culture golden files, record inputs and exceptions, compare money numerically.</li>
+    <li class="item">Every difference gets a category; unexplained ones fail the build; changes are reviewed.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="9" data-cue="Five things to remember" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="9" data-cue="One: legacy output is the specification" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="9" data-cue="Two: use a seam, not a refactor" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="9" data-cue="Three: mirror the production orchestration" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="9" data-cue="Four: write golden files in the invariant culture" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="9" data-cue="Five: every difference gets a category" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="9" data-cue="In the next lesson">
+  <div class="kicker">Next</div>
+  <h1>05 · Money, Rounding and Numeric Parity</h1>
+  <p class="lead">double versus decimal, banker's rounding, day-count basis, and the missing penny in household allocation.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

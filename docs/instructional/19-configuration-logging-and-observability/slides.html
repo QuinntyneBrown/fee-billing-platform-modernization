@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 19 Slides</title>
+<!--
+  Slides for the lesson 19 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="19" data-lesson-title="Configuration, Logging and Observability" data-parts="Introduction|The questions|Inventory first|Layered configuration|Secrets|Options|Structured logging|OpenTelemetry|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 19</div>
+  <h1>Configuration, Logging<br>and Observability</h1>
+  <p class="lead">Web.config, transforms and log4net → options, structured logs and OpenTelemetry</p>
+</section>
+
+<section id="hidden-risk" data-part="0" data-cue="In FeeBilling they hide real risk">
+  <h2>Plumbing that hides real risk</h2>
+  <ul>
+    <li>Per-client behaviour in XML transforms</li>
+    <li>Production passwords in source control</li>
+    <li>A feature flag set in a file its process never reads</li>
+    <li>New services that collect telemetry, then throw it away</li>
+  </ul>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="Here's what you'll be ready for.">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>What replaces Web.config and config transforms?</li>
+    <li>How do you migrate configuration safely?</li>
+    <li>Structured logging versus string logging?</li>
+    <li>How do you trace a request across old and new systems?</li>
+    <li>What would you put on the billing dashboard?</li>
+  </ul>
+</section>
+
+<section id="operability" data-part="1" data-cue="Interviewers ask these to find out whether you treat operability">
+  <div class="kicker">Operability is part of the migration</div>
+  <p class="quote">If you can't see a billing run, you can't prove it's correct.</p>
+</section>
+
+<!-- ───────────── Inventory ───────────── -->
+<section id="app-settings" data-part="2" data-cue="Open legacy/FeeBilling.Web/Web.config and look at the app settings section.">
+  <h2>Ten custom app settings</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config (values of secrets elided)</div>
+  <pre class="code tight" data-lang="xml">&lt;add key="RemoteAppApiKey" value="…" /&gt;
+&lt;add key="Billing.DefaultFirmId" value="1" /&gt;
+&lt;!-- Documentation only: the fee calculators always divide by 4. Nothing reads this key. --&gt;
+&lt;add key="Billing.DayCountBasis" value="Annual/4" /&gt;
+&lt;add key="Feature.HouseholdBilling" value="true" /&gt;
+&lt;add key="Feature.FlowProRating" value="false" /&gt;
+&lt;add key="Invoice.LogoPath" value="C:\FeeBilling\branding\logo.png" /&gt;
+&lt;add key="Invoice.FooterText" value="Questions about this invoice? Contact your advisor." /&gt;
+&lt;add key="Smtp.Host" value="smtp.internal.feebilling.local" /&gt;
+&lt;add key="Smtp.From" value="billing@feebilling.example" /&gt;
+&lt;add key="Custodian.FeedArchivePath" value="\\fileserver01\custodian-feeds\archive" /&gt;</pre>
+</section>
+
+<section id="three-reads" data-part="2" data-cue="You'll find exactly three reads in the whole legacy folder.">
+  <h2>Every read of ConfigurationManager.AppSettings</h2>
+  <table>
+    <tr><th>File</th><th>Key</th></tr>
+    <tr><td>FeeBilling.Invoicing/InvoicePdfRenderer.cs</td><td>Invoice.LogoPath</td></tr>
+    <tr><td>FeeBilling.Web/Global.asax.cs</td><td>RemoteAppApiKey</td></tr>
+    <tr><td>FeeBilling.BillingRunner/BillingRunnerService.cs</td><td>Feature.HouseholdBilling</td></tr>
+  </table>
+  <p style="margin-top:36px">The web app reads <span class="amber">2 of its 10</span> custom keys.</p>
+</section>
+
+<section id="classify" data-part="2" data-cue="Let's classify it">
+  <h2>Classify, don't copy</h2>
+  <div class="cols3">
+    <div class="card"><h3>Dead</h3><p>Read by nothing. Delete it.</p></div>
+    <div class="card legacy"><h3 class="amber">Business rule</h3><p>Belongs in audited data, not a file.</p></div>
+    <div class="card modern"><h3>Real config</h3><p>Migrate to options, per environment.</p></div>
+  </div>
+</section>
+
+<section id="default-firm" data-part="2" data-cue="Billing.DefaultFirmId looks important, but nothing reads it.">
+  <h2>Billing.DefaultFirmId: read by nothing</h2>
+  <div class="file">legacy/FeeBilling.Web/Views/Home/Index.cshtml</div>
+  <pre class="code" data-lang="js" data-mark="1">window.feeBillingConfig = { defaultFirmId: 1 };</pre>
+  <p>Delete the key. Later, derive the firm from the user's claims.</p>
+</section>
+
+<section id="day-count" data-part="2" data-cue="Billing.DayCountBasis has a comment that says it's documentation only">
+  <h2>Billing.DayCountBasis: a contract term</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code tight" data-lang="xml" data-mark="1">&lt;!-- Documentation only: the fee calculators always divide by 4. Nothing reads this key. --&gt;
+&lt;add key="Billing.DayCountBasis" value="Annual/4" /&gt;</pre>
+  <p>Annual ÷ 4 or actual/365 is part of the <span class="accent">fee agreement</span>.</p>
+  <p class="muted">It belongs in the database: a per-firm billing policy, versioned and audited.</p>
+</section>
+
+<section id="dead-keys" data-part="2" data-cue="Feature.FlowProRating is read by nothing">
+  <h2>The rest</h2>
+  <table>
+    <tr><th>Key</th><th>Read by</th><th>Action</th></tr>
+    <tr><td>Feature.FlowProRating</td><td>Nothing (still a TODO)</td><td>Delete until the feature exists</td></tr>
+    <tr><td>Invoice.FooterText</td><td>Nothing</td><td>Delete</td></tr>
+    <tr><td>Smtp.Host, Smtp.From</td><td>Nothing in this repo</td><td>Check deployment scripts first</td></tr>
+    <tr><td>Custodian.FeedArchivePath</td><td>Nothing in this repo</td><td>UNC path → blob container</td></tr>
+  </table>
+</section>
+
+<section id="clientx" data-part="2" data-cue="Now the most interesting finding.">
+  <h2>The ClientX transform</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.ClientX.config</div>
+  <pre class="code tight" data-lang="xml" data-mark="4" style="font-size:21px">&lt;!-- ClientX's fee agreement says actual/365. See Billing.DayCountBasis in Web.config: nothing reads it. --&gt;
+&lt;add key="Billing.DayCountBasis" value="Actual/365" xdt:Transform="SetAttributes" xdt:Locator="Match(key)" /&gt;
+
+&lt;add key="Feature.HouseholdBilling" value="false" xdt:Transform="SetAttributes" xdt:Locator="Match(key)" /&gt;</pre>
+  <p class="muted">Applied at publish time, for a dedicated enterprise instance.</p>
+</section>
+
+<section id="household-flag" data-part="2" data-cue="But the web application never reads that flag.">
+  <h2>Set in one process, read in another</h2>
+  <div class="file">legacy/FeeBilling.BillingRunner/BillingRunnerService.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1">if (ConfigurationManager.AppSettings["Feature.HouseholdBilling"] == "true")</pre>
+  <div class="file">legacy/FeeBilling.BillingRunner/App.config</div>
+  <pre class="code" data-lang="xml" data-mark="1">&lt;add key="Feature.HouseholdBilling" value="true" /&gt;</pre>
+  <p>Unless ClientX's runner config is edited separately, <span class="amber">ClientX's households are billed</span> despite the flag that says off.</p>
+</section>
+
+<section id="inventory-lesson" data-part="2" data-cue="The lesson for an interview: inventory first.">
+  <h2>Inventory first</h2>
+  <ul class="checks">
+    <li>Grep every key against the code</li>
+    <li>Delete dead keys instead of migrating them</li>
+    <li>Move business rules into data</li>
+    <li>Rotate every secret that was ever committed</li>
+  </ul>
+</section>
+
+<!-- ───────────── Layered configuration ───────────── -->
+<section id="build-once" data-part="3" data-cue="What replaces config transforms?">
+  <h2>Build once, configure per environment</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Legacy</h3><p>XML transforms at publish time: a different artifact for each client.</p></div>
+    <div class="card modern"><h3>Modern .NET</h3><p>One artifact. Configuration layered at runtime.</p></div>
+  </div>
+</section>
+
+<section id="providers" data-part="3" data-cue="WebApplication.CreateBuilder already loads providers in order">
+  <h2>WebApplication.CreateBuilder: later providers win</h2>
+  <div class="steps" style="grid-template-columns:1fr">
+    <div class="step"><span class="num">1</span>appsettings.json<span class="tag">shared defaults</span></div>
+    <div class="step"><span class="num">2</span>appsettings.{Environment}.json<span class="tag">per environment</span></div>
+    <div class="step"><span class="num">3</span>User secrets<span class="tag">Development only</span></div>
+    <div class="step"><span class="num">4</span>Environment variables<span class="tag">per deployment</span></div>
+    <div class="step on"><span class="num">5</span>Command line<span class="tag">wins</span></div>
+  </div>
+</section>
+
+<section id="labels" data-part="3" data-cue="For per-client settings, the natural replacement">
+  <h2>Per client: App Configuration labels</h2>
+  <svg width="1640" height="380" viewBox="0 0 1640 380">
+    <defs><marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="20" width="620" height="140" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="310" y="80" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Shared values (no label)</text>
+    <text x="310" y="122" fill="#8ea2c0" font-size="26" text-anchor="middle">loaded first</text>
+    <rect x="0" y="220" width="620" height="140" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="310" y="280" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Label "ClientX"</text>
+    <text x="310" y="322" fill="#8ea2c0" font-size="26" text-anchor="middle">loaded second: overrides</text>
+    <path d="M630,90 C780,90 780,190 920,190" fill="none" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow)"/>
+    <path d="M630,290 C780,290 780,190 920,190" fill="none" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="930" y="110" width="710" height="160" rx="18" fill="#121b2f" stroke="#38bdf8" stroke-width="3"/>
+    <text x="1285" y="180" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">ClientX's effective configuration</text>
+    <text x="1285" y="224" fill="#8ea2c0" font-size="26" text-anchor="middle">e.g. invoice logo, SMTP sender address</text>
+  </svg>
+</section>
+
+<section id="flags" data-part="3" data-cue="Feature flags that change invoices, like household billing, need more than a boolean.">
+  <h2>Flags that change invoices</h2>
+  <ul>
+    <li>Evaluated <span class="accent">per firm</span></li>
+    <li>With an audit trail: who changed what, and when</li>
+    <li>App Configuration feature flags or <b>Microsoft.FeatureManagement</b></li>
+  </ul>
+</section>
+
+<section id="provider-order" data-part="3" data-cue="Watch the provider order.">
+  <h2>Watch the provider order</h2>
+  <p>A provider added <span class="amber">after</span> CreateBuilder comes after the environment variables, so it overrides them.</p>
+  <p class="muted">Decide deliberately whether an operator's environment variable can override central configuration.</p>
+</section>
+
+<!-- ───────────── Secrets ───────────── -->
+<section id="committed-secrets" data-part="4" data-cue="Now the uncomfortable part.">
+  <h2>Committed secrets</h2>
+  <ul>
+    <li class="small"><b>Web.Release.config</b> and <b>Web.ClientX.config</b>: production SQL logins with passwords</li>
+    <li class="small">Two machine keys: base <b>Web.config</b> and <b>Web.ClientX.config</b></li>
+    <li class="small">The remote-app API key in <b>Web.config</b>, and the same value in the new code:</li>
+  </ul>
+  <div class="file">src/FeeBilling.Accounts.Api/appsettings.json (value elided)</div>
+  <pre class="code" data-lang="json" data-mark="3">"RemoteApp": {
+  "Url": "http://localhost:8080",
+  "ApiKey": "…"
+}</pre>
+</section>
+
+<section id="rotate" data-part="4" data-cue="What do you do? Rotate every one of them.">
+  <h2>Rotate. Then move them.</h2>
+  <ol>
+    <li class="small"><b>Rotate every one.</b> Deleting doesn't un-leak: it's in git history and every clone</li>
+    <li class="small">Azure <b>Key Vault</b>, reached with <b>managed identity</b>: no credential to store</li>
+    <li class="small">App Configuration <b>Key Vault references</b>: one configuration tree</li>
+    <li class="small"><b>dotnet user-secrets</b> locally</li>
+    <li class="small">Secret scanning in CI (lesson 24)</li>
+  </ol>
+</section>
+
+<!-- ───────────── Options ───────────── -->
+<section id="options" data-part="5" data-cue="Once configuration is layered, bind it to strongly typed options.">
+  <h2>Strongly typed options</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code" data-lang="cs" data-mark="4">builder.Services.AddOptions&lt;InvoiceOptions&gt;()
+    .BindConfiguration("Invoice")
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+public sealed class InvoiceOptions
+{
+    [Required] public required string LogoPath { get; init; }
+}</pre>
+  <p class="muted small">[OptionsValidator] generates the validator at compile time instead of using reflection.</p>
+</section>
+
+<section id="validate-on-start" data-part="5" data-cue="ValidateOnStart is the important part.">
+  <h2>Fail at startup, not at invoice 40,000</h2>
+  <div class="file">legacy/FeeBilling.Invoicing/InvoicePdfRenderer.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1">var path = ConfigurationManager.AppSettings["Invoice.LogoPath"];</pre>
+  <p>Read lazily, on the first PDF. A bad path isn't found until someone asks for an invoice.</p>
+  <p class="accent">A bad value should stop startup, not break the forty-thousandth invoice PDF.</p>
+</section>
+
+<section id="three-interfaces" data-part="5" data-cue="Know the three interfaces.">
+  <h2>Three interfaces</h2>
+  <table>
+    <tr><th>Interface</th><th>Lifetime</th><th>Behaviour</th></tr>
+    <tr><td>IOptions&lt;T&gt;</td><td>Singleton</td><td>Read once</td></tr>
+    <tr><td>IOptionsSnapshot&lt;T&gt;</td><td>Scoped</td><td>Recomputed per request; sees reloads</td></tr>
+    <tr><td>IOptionsMonitor&lt;T&gt;</td><td>Singleton</td><td>Always current; change notifications</td></tr>
+  </table>
+  <p class="amber" style="margin-top:32px">Trap: a snapshot injected into a singleton fails scope validation. Use the monitor.</p>
+</section>
+
+<!-- ───────────── Structured logging ───────────── -->
+<section id="log-concat" data-part="6" data-cue="Now logging. Open legacy/FeeBilling.Core/FeeCalculator.cs">
+  <h2>One INFO line per calculation</h2>
+  <div class="file">legacy/FeeBilling.Core/FeeCalculator.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1">Log.Info("Fee for " + accountId + " = " + fee);</pre>
+  <p class="muted">Tens of thousands of lines of text for one large firm's run.</p>
+</section>
+
+<section id="log-problems" data-part="6" data-cue="What's wrong with that? Two things.">
+  <h2>What's wrong with it</h2>
+  <ol>
+    <li><b>Unsearchable text.</b> "Every fee over $1,000" or "every line for account 1001" means parsing strings.</li>
+    <li><b>Allocates even when INFO is off.</b> The concatenation runs regardless.</li>
+  </ol>
+</section>
+
+<section id="templates" data-part="6" data-cue="The modern replacement is ILogger of T with message templates.">
+  <h2>Message templates and source-generated logging</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,3,4,5">logger.LogInformation("Fee calculated for account {AccountId}: {Fee}", accountId, fee);
+
+[LoggerMessage(EventId = 1001, Level = LogLevel.Debug,
+    Message = "Fee calculated for account {AccountId}: {Fee}")]
+static partial void FeeCalculated(ILogger logger, int accountId, decimal fee);</pre>
+  <ul>
+    <li class="small">AccountId and Fee stay named properties you can query and aggregate</li>
+    <li class="small">Generated code: level check, no boxing, a stable event ID</li>
+    <li class="small">Demote the per-account line to DEBUG; replace it with a metric</li>
+  </ul>
+</section>
+
+<section id="log-files" data-part="6" data-cue="Also look at where legacy logs go.">
+  <h2>Where legacy logs go</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code" data-lang="xml" data-mark="2">&lt;appender name="RollingFile" type="log4net.Appender.RollingFileAppender"&gt;
+  &lt;file value="C:\Logs\FeeBilling\web.log" /&gt;</pre>
+  <p>Runner and ingestion write their own files. Investigating one run means logging on to several machines.</p>
+  <p class="accent">New services: console + an OpenTelemetry exporter, collected centrally.</p>
+</section>
+
+<section id="pii" data-part="6" data-cue="Structured logging creates a new risk">
+  <h2>Structured logs are a searchable database</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Mvc/AccountController.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1">Log.Warn("Failed login for " + model.UserName + " from " + Request.UserHostAddress);</pre>
+  <ul>
+    <li class="small">User names, IP addresses, account IDs: indexed and queryable</li>
+    <li class="small">Classify personal data; redact it, or replace it with a keyed hash</li>
+    <li class="small">.NET's compliance and redaction library does this (check current API names)</li>
+  </ul>
+</section>
+
+<section id="mask" data-part="6" data-cue="Legacy even has the logic already">
+  <h2>Legacy already has the masking</h2>
+  <div class="file">legacy/FeeBilling.Core/AccountNumberFormatter.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1">/// &lt;summary&gt;Masks all but the last 4 characters for statements: MRW000001001 -&gt; ********1001.&lt;/summary&gt;
+public static string Mask(string accountNumber)</pre>
+  <p class="muted">It was just never applied to logs.</p>
+</section>
+
+<!-- ───────────── OpenTelemetry ───────────── -->
+<section id="no-exporter" data-part="7" data-cue="Finally, observability. Open src/FeeBilling.ServiceDefaults/ServiceDefaultsExtensions.cs.">
+  <h2>Collected, then dropped</h2>
+  <div class="file">src/FeeBilling.ServiceDefaults/ServiceDefaultsExtensions.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1,2">// TODO: no exporter yet. Telemetry is collected and then dropped.
+// OTLP (collector) vs. Azure Monitor was never decided.</pre>
+  <p class="muted">Logging, ASP.NET Core / HTTP client / runtime metrics and tracing are all configured.</p>
+</section>
+
+<section id="exporter-adr" data-part="7" data-cue="So the first step is to decide, and write the ADR.">
+  <h2>Decide, and write the ADR</h2>
+  <div class="cols">
+    <div class="card modern"><h3>OTLP to a collector</h3><p>Vendor-neutral. <b>UseOtlpExporter</b> when the endpoint is configured.</p></div>
+    <div class="card"><h3>Azure Monitor</h3><p>Natural if you're all-in on Azure.</p></div>
+  </div>
+  <p class="amber" style="margin-top:36px">Either is fine. Having no decision isn't.</p>
+</section>
+
+<section id="billing-metrics" data-part="7" data-cue="Then add billing-specific telemetry.">
+  <h2>Billing telemetry</h2>
+  <ul>
+    <li class="small">A <b>Meter</b> for the billing domain, via <b>IMeterFactory</b></li>
+    <li class="small">Counter: accounts billed · Histogram: run duration</li>
+    <li class="small">An <b>ActivitySource</b> for the run and its chunks: one run, one trace</li>
+  </ul>
+  <div class="cols" style="margin-top:28px">
+    <div class="card modern"><h3>Tag by firm ID</h3><p>~40 time series</p></div>
+    <div class="card legacy"><h3 class="amber">Never by account ID</h3><p>~350,000 series: high cardinality</p></div>
+  </div>
+</section>
+
+<section id="trace-hops" data-part="7" data-cue="Now tracing across old and new, which is the interview question.">
+  <h2>W3C trace context, hop by hop</h2>
+  <svg width="1640" height="560" viewBox="0 0 1640 560">
+    <defs><marker id="arrow2" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="40" width="240" height="110" rx="16" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="120" y="104" fill="#e8eef8" font-size="30" text-anchor="middle">Browser</text>
+    <line x1="245" y1="95" x2="345" y2="95" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow2)"/>
+    <rect x="355" y="40" width="260" height="110" rx="16" fill="#121b2f" stroke="#38bdf8" stroke-width="3"/>
+    <text x="485" y="104" fill="#e8eef8" font-size="30" text-anchor="middle">Gateway</text>
+    <line x1="620" y1="95" x2="720" y2="95" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow2)"/>
+    <rect x="730" y="40" width="240" height="110" rx="16" fill="#121b2f" stroke="#38bdf8" stroke-width="3"/>
+    <text x="850" y="104" fill="#e8eef8" font-size="30" text-anchor="middle">API</text>
+    <line x1="975" y1="95" x2="1075" y2="95" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow2)"/>
+    <rect x="1085" y="40" width="250" height="110" rx="16" fill="#121b2f" stroke="#f5b544" stroke-width="3"/>
+    <text x="1210" y="90" fill="#e8eef8" font-size="28" text-anchor="middle">Outbox →</text>
+    <text x="1210" y="126" fill="#e8eef8" font-size="28" text-anchor="middle">Service Bus</text>
+    <line x1="1340" y1="95" x2="1400" y2="95" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow2)"/>
+    <rect x="1410" y="40" width="230" height="110" rx="16" fill="#121b2f" stroke="#f5b544" stroke-width="3"/>
+    <text x="1525" y="104" fill="#e8eef8" font-size="30" text-anchor="middle">Worker</text>
+    <text x="780" y="200" fill="#38bdf8" font-size="24" text-anchor="middle">automatic: instrumentation</text>
+    <text x="780" y="230" fill="#38bdf8" font-size="24" text-anchor="middle">propagates traceparent</text>
+    <text x="1260" y="200" fill="#f5b544" font-size="24" text-anchor="middle">not automatic: store the trace context</text>
+    <text x="1260" y="230" fill="#f5b544" font-size="24" text-anchor="middle">in the outbox row, restore it in the consumer</text>
+    <path d="M485,155 L485,380" fill="none" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow2)"/>
+    <rect x="300" y="390" width="370" height="120" rx="16" fill="#221b0d" stroke="#f5b544" stroke-width="3"/>
+    <text x="485" y="440" fill="#e8eef8" font-size="30" font-weight="600" text-anchor="middle">Legacy IIS</text>
+    <text x="485" y="480" fill="#8ea2c0" font-size="24" text-anchor="middle">no OpenTelemetry</text>
+    <text x="720" y="440" fill="#f5b544" font-size="24">read traceparent in Global.asax,</text>
+    <text x="720" y="472" fill="#f5b544" font-size="24">put the trace ID in the log4net context</text>
+  </svg>
+</section>
+
+<section id="legacy-trace" data-part="7" data-cue="So make a small additive change in Global.asax.cs">
+  <h2>One trace ID finds every line</h2>
+  <div class="file">Sketch · additive change in legacy/FeeBilling.Web/Global.asax.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="5">protected void Application_BeginRequest(object sender, EventArgs e)
+{
+    var traceparent = Request.Headers["traceparent"];   // 00-{trace-id}-{parent-id}-{flags}
+    if (traceparent != null &amp;&amp; traceparent.Length &gt;= 35)
+        log4net.LogicalThreadContext.Properties["TraceId"] = traceparent.Substring(3, 32);
+}</pre>
+  <p class="muted">Then print the property in the log4net pattern.</p>
+</section>
+
+<section id="aspire-dashboard" data-part="7" data-cue="For a local demo, you can run the standalone Aspire dashboard">
+  <h2>Local demo</h2>
+  <p>Run the standalone <span class="accent">Aspire dashboard</span> in a container as an OTLP endpoint.</p>
+  <p class="muted">Point the gateway and Accounts.Api at it; watch one trace span both.</p>
+</section>
+
+<section id="dashboard" data-part="7" data-cue="And the billing dashboard?">
+  <h2>The billing dashboard</h2>
+  <div class="cols">
+    <div class="card"><h3>Show</h3><ul><li>Run duration</li><li>Accounts per second</li><li>Failed and quarantined counts</li><li>Dead-letter queue depth</li><li>Parity differences</li><li>Error rate by firm</li></ul></div>
+    <div class="card legacy"><h3 class="amber">Page on</h3><ul><li>Throughput dropping mid-run</li><li>Messages in the dead-letter queue</li><li>Any unexplained parity difference</li></ul></div>
+  </div>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="8" data-cue="A few traps to call out.">
+  <h2>Traps</h2>
+  <div class="cols">
+    <ul>
+      <li class="small">Migrating every key</li>
+      <li class="small">Business rules as deployment config</li>
+      <li class="small">Flags in more than one process's config</li>
+      <li class="small">Committed secrets: rotate, don't just delete</li>
+      <li class="small">Provider order surprises</li>
+    </ul>
+    <ul>
+      <li class="small">A snapshot injected into a singleton</li>
+      <li class="small">Making PII searchable</li>
+      <li class="small">High-cardinality metric tags</li>
+      <li class="small">Assuming trace context crosses the outbox</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="9" data-cue="Let's practise.">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="9" data-cue="What replaces Web.config and config transforms?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">What replaces Web.config and config transforms?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="9" data-cue="Layered configuration:">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Layered providers: appsettings, environment file, environment variables</li>
+    <li>App Configuration with a label per client, not a transform per client</li>
+    <li>Secrets in Key Vault with managed identity; user secrets locally</li>
+    <li>Typed options validated at startup. Build once.</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="9" data-cue="How do you migrate configuration safely?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">How do you migrate configuration safely?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="9" data-cue="Inventory first: grep every key against the code.">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Inventory: grep every key (web app reads 2 of 10)</li>
+    <li>Delete dead keys rather than migrating them</li>
+    <li>Business rules like day-count basis → versioned data</li>
+    <li>Find flags read by a different process; rotate committed secrets</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="9" data-cue="Structured logging or string logging?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">Structured logging or string logging?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="9" data-cue="Structured. Message templates keep named properties">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Structured: named properties you can query and aggregate</li>
+    <li>Concatenation: unsearchable, allocates even when off</li>
+    <li>LoggerMessage source generator removes the overhead</li>
+    <li>Classify and redact PII: it's all indexed</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="9" data-cue="How do you trace a request across old and new systems?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">How do you trace a request across old and new systems?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="9" data-cue="W3C trace context. ASP.NET Core and HTTP client instrumentation">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>W3C trace context: traceparent propagated by instrumentation</li>
+    <li>The gateway forwards it</li>
+    <li>Outbox: store the context in the row, restore it in the consumer</li>
+    <li>Legacy: read the header, trace ID into the log4net context</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="9" data-cue="What would you put on the billing dashboard?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">What would you put on the billing dashboard?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="9" data-cue="Run duration, accounts per second, failed and quarantined counts, dead-letter depth">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Run duration, accounts/second, failed and quarantined counts</li>
+    <li>Dead-letter depth, parity differences, error rate by firm</li>
+    <li>Tagged by firm, never by account</li>
+    <li>Alert: throughput drop, dead letters, unexplained parity diffs</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Inventory config against the code: 2 of 10 keys read, a contract term, a flag nobody reads.</li>
+    <li class="item">Layered providers and App Configuration labels. Build once.</li>
+    <li class="item">Rotate committed secrets, use Key Vault, validate options at startup.</li>
+    <li class="item">Message templates, source-generated logging, and PII redaction.</li>
+    <li class="item">Pick an exporter, tag metrics by firm, carry trace context everywhere.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember from this lesson." data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: inventory configuration against the code" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: replace transforms with layered providers" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: rotate every committed secret" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: use message templates" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: choose an exporter" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="10" data-cue="In the next lesson, we'll replace Forms authentication">
+  <div class="kicker">Next</div>
+  <h1>20 · Authentication, Authorization and Tenancy</h1>
+  <p class="lead">OpenID Connect, policy-based authorization, and tenant isolation between firms.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

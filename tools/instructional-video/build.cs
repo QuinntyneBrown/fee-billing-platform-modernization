@@ -1,9 +1,11 @@
 #:property PublishAot=false
 
-// Builds a lesson video: the lesson's slides.html, one screenshot per slide, timed to the narration MP3,
+// Builds lesson videos: the lesson's slides.html, one screenshot per slide, timed to the narration MP3,
 // plus captions from the script. Output: docs/instructional/<lesson>/<lesson>.mp4
 //
-//   dotnet run tools/instructional-video/build.cs -- 01
+//   dotnet run tools/instructional-video/build.cs -- 01 02 03           build these lessons
+//   dotnet run tools/instructional-video/build.cs -- 02 --check         validate cues and print the schedule only
+//   dotnet run tools/instructional-video/build.cs -- 02 --slides-only   also render the PNGs (for review), no encode
 //
 // Needs, per lesson: slides.html (each <section> has a data-cue phrase from script.md), the lesson MP3, and
 // the timing manifest tools/instructional-audio/generate.cs writes to tools/instructional-audio/.cache/timings/.
@@ -16,112 +18,176 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-if (args.Length == 0)
+var checkOnly = args.Contains("--check");
+var slidesOnly = args.Contains("--slides-only");
+var lessons = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToList();
+if (lessons.Count == 0)
 {
-    Console.Error.WriteLine("Usage: dotnet run tools/instructional-video/build.cs -- <lesson-number-or-folder>");
+    Console.Error.WriteLine("Usage: dotnet run tools/instructional-video/build.cs -- <lesson-number>... [--check | --slides-only]");
     return 1;
 }
 
 var repoRoot = FindRepoRoot();
 var lessonsRoot = Path.Combine(repoRoot, "docs", "instructional");
-var matches = Directory.GetDirectories(lessonsRoot)
-    .Where(d => Path.GetFileName(d).StartsWith(args[0], StringComparison.OrdinalIgnoreCase))
-    .ToList();
-if (matches.Count != 1)
+var failed = 0;
+foreach (var lesson in lessons)
 {
-    Console.Error.WriteLine($"'{args[0]}' matches {matches.Count} lesson folders; expected exactly one.");
-    return 1;
-}
-
-var lessonDirectory = matches[0];
-var name = Path.GetFileName(lessonDirectory);
-var slidesPath = Path.Combine(lessonDirectory, "slides.html");
-var audioPath = Path.Combine(lessonDirectory, name + ".mp3");
-var timingsPath = Path.Combine(repoRoot, "tools", "instructional-audio", ".cache", "timings", name + ".json");
-var workDirectory = Path.Combine(repoRoot, "tools", "instructional-video", ".cache", name);
-var outputPath = Path.Combine(lessonDirectory, name + ".mp4");
-
-foreach (var required in new[] { slidesPath, audioPath, timingsPath })
-{
-    if (!File.Exists(required))
+    try
     {
-        Console.Error.WriteLine($"Missing {Path.GetRelativePath(repoRoot, required)}. " +
-            (required == timingsPath ? "Run tools/instructional-audio/generate.cs for this lesson first." : string.Empty));
-        return 1;
+        failed += BuildLesson(lesson) == 0 ? 0 : 1;
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or IOException)
+    {
+        Console.Error.WriteLine($"{lesson}: {ex.Message}");
+        failed++;
     }
 }
 
-Directory.CreateDirectory(workDirectory);
+return failed == 0 ? 0 : 1;
 
-var (totalSeconds, segments) = Narration.Load(timingsPath);
-var slides = Slides.Parse(File.ReadAllText(slidesPath));
-var schedule = Slides.Schedule(slides, segments, totalSeconds, out var scheduleErrors);
-if (scheduleErrors.Count > 0)
+int BuildLesson(string lesson)
 {
-    scheduleErrors.ForEach(Console.Error.WriteLine);
-    return 1;
-}
+    var matches = Directory.GetDirectories(lessonsRoot)
+        .Where(d => Path.GetFileName(d).StartsWith(lesson, StringComparison.OrdinalIgnoreCase))
+        .ToList();
+    if (matches.Count != 1)
+    {
+        Console.Error.WriteLine($"'{lesson}' matches {matches.Count} lesson folders; expected exactly one.");
+        return 1;
+    }
 
-Console.WriteLine($"{slides.Count} slides over {TimeSpan.FromSeconds(totalSeconds):mm\\:ss} of narration.");
+    var lessonDirectory = matches[0];
+    var name = Path.GetFileName(lessonDirectory);
+    var slidesPath = Path.Combine(lessonDirectory, "slides.html");
+    var audioPath = Path.Combine(lessonDirectory, name + ".mp3");
+    var timingsPath = Path.Combine(repoRoot, "tools", "instructional-audio", ".cache", "timings", name + ".json");
+    var workDirectory = Path.Combine(repoRoot, "tools", "instructional-video", ".cache", name);
+    var outputPath = Path.Combine(lessonDirectory, name + ".mp4");
 
-// 1. Screenshots.
-var browser = Tools.FindBrowser();
-var profile = Path.Combine(workDirectory, "browser-profile");
-var slidesUri = new Uri(slidesPath).AbsoluteUri;
-for (var i = 0; i < slides.Count; i++)
-{
-    var png = Path.Combine(workDirectory, $"slide-{i:000}.png");
-    File.Delete(png);
-    Tools.Run(browser,
+    foreach (var required in new[] { slidesPath, audioPath, timingsPath })
+    {
+        if (!File.Exists(required))
+        {
+            Console.Error.WriteLine($"{name}: missing {Path.GetRelativePath(repoRoot, required)}. " +
+                (required == timingsPath ? "Run tools/instructional-audio/generate.cs for this lesson first." : string.Empty));
+            return 1;
+        }
+    }
+
+    var (totalSeconds, segments) = Narration.Load(timingsPath);
+    var slides = Slides.Parse(File.ReadAllText(slidesPath));
+    var schedule = Slides.Schedule(slides, segments, totalSeconds, out var scheduleErrors);
+    if (scheduleErrors.Count > 0)
+    {
+        scheduleErrors.ForEach(e => Console.Error.WriteLine($"{name}: {e}"));
+        return 1;
+    }
+
+    Console.WriteLine($"{name}: {slides.Count} slides over {TimeSpan.FromSeconds(totalSeconds):mm\\:ss} of narration.");
+    for (var i = 0; i < slides.Count; i++)
+    {
+        Console.WriteLine($"  {TimeSpan.FromSeconds(schedule[i].Start):mm\\:ss}  {schedule[i].Duration,6:0.0}s  {slides[i].Id}");
+    }
+
+    if (checkOnly)
+    {
+        return 0;
+    }
+
+    // 1. Screenshots, four browsers at a time, each with its own profile. Only one build renders at a time on the
+    //    machine: several builds each running four browsers exhaust memory and slow every screenshot to a crawl.
+    Directory.CreateDirectory(workDirectory);
+    var browser = Tools.FindBrowser();
+    var slidesUri = new Uri(slidesPath).AbsoluteUri;
+    const int workers = 4;
+    using (var renderLock = new Mutex(false, "FeeBilling.InstructionalVideo.Render"))
+    {
+        try
+        {
+            if (!renderLock.WaitOne(0))
+            {
+                Console.WriteLine($"{name}: waiting for another build to finish rendering…");
+                renderLock.WaitOne();
+            }
+        }
+        catch (AbandonedMutexException)
+        {
+            // The previous holder was killed mid-render; the lock is now ours.
+        }
+
+        try
+        {
+            Parallel.For(0, workers, worker =>
+            {
+                var profile = Path.Combine(workDirectory, $"browser-profile-{worker}");
+                for (var i = worker; i < slides.Count; i += workers)
+                {
+                    var png = Path.Combine(workDirectory, $"slide-{i:000}.png");
+                    File.Delete(png);
+                    Tools.Run(browser,
+                    [
+                        "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
+                        "--window-size=1920,1080", $"--user-data-dir={profile}", $"--screenshot={png}", $"{slidesUri}#{slides[i].Id}",
+                    ]);
+                }
+            });
+        }
+        finally
+        {
+            renderLock.ReleaseMutex();
+        }
+    }
+
+    var missing = Enumerable.Range(0, slides.Count).Where(i => !File.Exists(Path.Combine(workDirectory, $"slide-{i:000}.png"))).ToList();
+    if (missing.Count > 0)
+    {
+        Console.Error.WriteLine($"{name}: screenshots failed for {string.Join(", ", missing.Select(i => slides[i].Id))}.");
+        return 1;
+    }
+
+    Console.WriteLine($"{name}: rendered {slides.Count} slides to {Path.GetRelativePath(repoRoot, workDirectory)}");
+    if (slidesOnly)
+    {
+        return 0;
+    }
+
+    // 2. Slide list for ffmpeg's concat demuxer. The last entry is repeated because the demuxer ignores its duration.
+    var concat = new StringBuilder("ffconcat version 1.0\n");
+    for (var i = 0; i < slides.Count; i++)
+    {
+        concat.Append(CultureInfo.InvariantCulture, $"file 'slide-{i:000}.png'\nduration {schedule[i].Duration:0.000}\n");
+    }
+
+    concat.Append(CultureInfo.InvariantCulture, $"file 'slide-{slides.Count - 1:000}.png'\n");
+    var concatPath = Path.Combine(workDirectory, "slides.ffconcat");
+    File.WriteAllText(concatPath, concat.ToString());
+
+    // 3. Captions, from the script's own wording rather than the spoken forms.
+    var captionsPath = Path.Combine(workDirectory, name + ".srt");
+    File.WriteAllText(captionsPath, Captions.ToSrt(segments), new UTF8Encoding(false));
+
+    // 4. Encode. Slides are still images, so 12 fps with a keyframe every 10 s is plenty and encodes quickly.
+    var title = Regex.Replace(File.ReadLines(Path.Combine(lessonDirectory, "script.md")).First(), @"^#\s*", string.Empty);
+    Tools.Run(Tools.FindFfmpeg(),
     [
-        "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
-        "--window-size=1920,1080", $"--user-data-dir={profile}", $"--screenshot={png}", $"{slidesUri}#{slides[i].Id}",
+        "-y", "-hide_banner", "-loglevel", "warning", "-stats",
+        "-f", "concat", "-safe", "0", "-i", concatPath,
+        "-i", audioPath,
+        "-i", captionsPath,
+        "-map", "0:v", "-map", "1:a", "-map", "2:s",
+        "-vf", "fps=12,format=yuv420p",
+        "-c:v", "libx264", "-preset", "veryfast", "-tune", "stillimage", "-crf", "20", "-g", "120",
+        "-c:a", "aac", "-b:a", "128k",
+        "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
+        "-metadata", $"title=FeeBilling Modernization {title}",
+        "-t", totalSeconds.ToString("0.000", CultureInfo.InvariantCulture),
+        "-movflags", "+faststart",
+        outputPath,
     ]);
-    if (!File.Exists(png))
-    {
-        Console.Error.WriteLine($"Screenshot failed for slide '{slides[i].Id}'.");
-        return 1;
-    }
 
-    Console.WriteLine($"  {TimeSpan.FromSeconds(schedule[i].Start):mm\\:ss}  {slides[i].Id}");
+    Console.WriteLine($"{name}: wrote {Path.GetRelativePath(repoRoot, outputPath)}  {new FileInfo(outputPath).Length / 1_048_576.0:0.0} MB");
+    return 0;
 }
-
-// 2. Slide list for ffmpeg's concat demuxer. The last entry is repeated because the demuxer ignores its duration.
-var concat = new StringBuilder("ffconcat version 1.0\n");
-for (var i = 0; i < slides.Count; i++)
-{
-    concat.Append(CultureInfo.InvariantCulture, $"file 'slide-{i:000}.png'\nduration {schedule[i].Duration:0.000}\n");
-}
-
-concat.Append(CultureInfo.InvariantCulture, $"file 'slide-{slides.Count - 1:000}.png'\n");
-var concatPath = Path.Combine(workDirectory, "slides.ffconcat");
-File.WriteAllText(concatPath, concat.ToString());
-
-// 3. Captions, from the script's own wording rather than the spoken forms.
-var captionsPath = Path.Combine(workDirectory, name + ".srt");
-File.WriteAllText(captionsPath, Captions.ToSrt(segments), new UTF8Encoding(false));
-
-// 4. Encode.
-var title = Regex.Replace(File.ReadLines(Path.Combine(lessonDirectory, "script.md")).First(), @"^#\s*", string.Empty);
-Tools.Run(Tools.FindFfmpeg(),
-[
-    "-y", "-hide_banner", "-loglevel", "warning", "-stats",
-    "-f", "concat", "-safe", "0", "-i", concatPath,
-    "-i", audioPath,
-    "-i", captionsPath,
-    "-map", "0:v", "-map", "1:a", "-map", "2:s",
-    "-vf", "fps=24,format=yuv420p",
-    "-c:v", "libx264", "-preset", "medium", "-tune", "stillimage", "-crf", "20",
-    "-c:a", "aac", "-b:a", "128k",
-    "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
-    "-metadata", $"title=FeeBilling Modernization {title}",
-    "-t", totalSeconds.ToString("0.000", CultureInfo.InvariantCulture),
-    "-movflags", "+faststart",
-    outputPath,
-]);
-
-Console.WriteLine($"wrote {Path.GetRelativePath(repoRoot, outputPath)}  {new FileInfo(outputPath).Length / 1_048_576.0:0.0} MB");
-return 0;
 
 static string FindRepoRoot()
 {

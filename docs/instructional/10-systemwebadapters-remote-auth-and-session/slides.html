@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 10 Slides</title>
+<!--
+  Slides for the lesson 10 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="10" data-lesson-title="SystemWebAdapters: Remote Authentication and Session" data-parts="Introduction|The questions|Three options|Wiring both sides|A request, step by step|The costs|Remote session|Security and testing|The exit plan|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 10</div>
+  <h1>SystemWebAdapters:<br>Remote Authentication and Session</h1>
+  <p class="lead">Old app owns the login. New services still need to know who the user is.</p>
+</section>
+
+<section id="objectives" data-part="0" data-cue="By the end of this lesson, you'll be able to">
+  <h2>By the end of this lesson</h2>
+  <ul class="checks">
+    <li>Explain the options for sharing a logged-in user</li>
+    <li>Wire and trace remote authentication</li>
+    <li>Name its costs and mitigations</li>
+    <li>Decide whether you need remote session</li>
+    <li>Test a service whose auth depends on another app</li>
+  </ul>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>How do old and new apps share a logged-in user during a migration?</li>
+    <li>What are the trade-offs of remote authentication?</li>
+    <li>How do you share session state between ASP.NET and ASP.NET Core?</li>
+    <li>How do you test an ASP.NET Core service whose authentication depends on another app?</li>
+  </ul>
+</section>
+
+<!-- ───────────── Three options ───────────── -->
+<section id="forms-login" data-part="2" data-cue="In FeeBilling, login belongs to the legacy app">
+  <h2>Login belongs to the legacy app</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code" data-lang="xml" data-mark="1,2">&lt;authentication mode="Forms"&gt;
+  &lt;forms loginUrl="~/Account/Login" name=".FEEBILLINGAUTH" timeout="120" slidingExpiration="true" /&gt;
+&lt;/authentication&gt;</pre>
+  <ul>
+    <li>Custom membership provider over the app's own user tables</li>
+    <li>The ticket is encrypted and signed with the machine key</li>
+    <li class="amber">Only ASP.NET on .NET Framework can read it</li>
+  </ul>
+</section>
+
+<section id="machine-key" data-part="2" data-cue="The machine key deserves a moment">
+  <h2>The machine key</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code tight" data-lang="xml" data-mark="1">&lt;!-- Shared across the web farm (and now also by the SystemWebAdapters remote-auth endpoint). --&gt;
+&lt;machineKey validationKey="7E2B3F7A4C1D9E8F…"
+            decryptionKey="A1B2C3D4E5F60718…"
+            validation="HMACSHA256" decryption="AES" /&gt;</pre>
+  <div class="cols">
+    <div class="card"><h3>Every IIS node</h3><p>Must share the key, or one node can't read another node's cookie. ClientX has its own key in <span class="accent">Web.ClientX.config</span>.</p></div>
+    <div class="card modern"><h3>ASP.NET Core equivalent</h3><p>A shared <b>Data Protection key ring</b>, handled just as deliberately.</p></div>
+  </div>
+</section>
+
+<template id="options">
+  <h2>Three ways to share the user</h2>
+  <div class="cols3">
+    <div class="card item"><h3>1 · Remote authentication</h3><p>On each request, the new app asks legacy "who is this?" by forwarding the cookies.</p></div>
+    <div class="card item"><h3>2 · Shared cookie</h3><p>Both apps read the same cookie. Needs compatible cookie middleware and a shared key ring.</p></div>
+    <div class="card item"><h3>3 · External identity provider</h3><p>Move login to OpenID Connect first; both apps trust it. The real target (lesson 20).</p></div>
+  </div>
+</template>
+<section id="options-0" data-part="2" data-cue="There are three broad ways to let a new service see that user" data-template="options"></section>
+<section id="options-1" data-part="2" data-cue="Option one is remote authentication" data-template="options" data-highlight="1"></section>
+<section id="options-2" data-part="2" data-cue="Option two is a shared cookie" data-template="options" data-highlight="2"></section>
+<section id="options-3" data-part="2" data-cue="Option three is to move login to an external identity provider" data-template="options" data-highlight="3"></section>
+
+<section id="options-pick" data-part="2" data-cue="The previous team picked option one">
+  <div class="kicker">The previous team's choice</div>
+  <h2>Remote authentication</h2>
+  <ul class="checks">
+    <li>No change to the legacy login page</li>
+    <li>Works with Forms authentication exactly as it is today</li>
+  </ul>
+  <p class="muted" style="margin-top:32px">A Forms ticket is a different format from what ASP.NET Core cookie authentication reads, so option two would mean changing how legacy issues its cookie first.</p>
+</section>
+
+<!-- ───────────── Wiring ───────────── -->
+<section id="packages" data-part="3" data-cue="The adapters come as three packages">
+  <h2>Three packages, two sides</h2>
+  <table>
+    <tr><th>Package</th><th>Runs on</th><th>In this repo</th></tr>
+    <tr><td>Microsoft.AspNetCore.SystemWebAdapters</td><td>Shared: a System.Web API surface for netstandard2.0 libraries</td><td class="muted">—</td></tr>
+    <tr><td>….SystemWebAdapters.FrameworkServices</td><td>.NET Framework, inside IIS</td><td>FeeBilling.Web.csproj</td></tr>
+    <tr><td>….SystemWebAdapters.CoreServices</td><td>ASP.NET Core</td><td>FeeBilling.Accounts.Api.csproj</td></tr>
+  </table>
+  <div class="file" style="margin-top:36px">legacy/FeeBilling.Web/FeeBilling.Web.csproj</div>
+  <pre class="code tight" data-lang="xml">&lt;PackageReference Include="Microsoft.AspNetCore.SystemWebAdapters.FrameworkServices" Version="2.3.0" /&gt;</pre>
+</section>
+
+<section id="global-asax" data-part="3" data-cue="On the legacy side, open legacy/FeeBilling.Web/Global.asax.cs">
+  <h2>Legacy side: the remote-app server</h2>
+  <div class="file">legacy/FeeBilling.Web/Global.asax.cs · Application_Start</div>
+  <pre class="code tight" data-lang="cs" data-mark="6,7">// Strangler-fig migration (2025): the ASP.NET Core services behind the YARP gateway call
+// back into this app to resolve the Forms-auth user (remote authentication).
+// Every request to Accounts.Api costs a round-trip to here.
+SystemWebAdapterConfiguration.AddSystemWebAdapters(this)
+    .AddProxySupport(options => options.UseForwardedHeaders = true)
+    .AddRemoteAppServer(options => options.ApiKey = ConfigurationManager.AppSettings["RemoteAppApiKey"])
+    .AddAuthenticationServer();</pre>
+  <p class="small muted">Web.config also registers <span class="accent">SystemWebAdapterModule</span> as an HTTP module, which is how the adapters see requests in IIS.</p>
+</section>
+
+<section id="program" data-part="3" data-cue="On the new side, open src/FeeBilling.Accounts.Api/Program.cs">
+  <h2>New side: the remote-app client</h2>
+  <div class="file">src/FeeBilling.Accounts.Api/Program.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="11">// Login is still owned by the legacy app (Forms auth). Each request resolves the user by calling
+// back into legacy (SystemWebAdapters remote authentication), so this API is down whenever legacy is.
+builder.Services.AddSystemWebAdapters()
+    .AddRemoteAppClient(options =>
+    {
+        options.RemoteAppUrl = new Uri(builder.Configuration["RemoteApp:Url"]
+            ?? throw new InvalidOperationException("RemoteApp:Url is not configured."));
+        options.ApiKey = builder.Configuration["RemoteApp:ApiKey"]
+            ?? throw new InvalidOperationException("RemoteApp:ApiKey is not configured.");
+    })
+    .AddAuthenticationClient(true);</pre>
+  <p class="small"><span class="amber">true</span> makes remote authentication the default scheme for the whole app.</p>
+</section>
+
+<section id="middleware" data-part="3" data-cue="Further down, the middleware order is">
+  <h2>Middleware order</h2>
+  <div class="file">src/FeeBilling.Accounts.Api/Program.cs</div>
+  <pre class="code" data-lang="cs" data-mark="2,4">app.UseExceptionHandler();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseSystemWebAdapters();
+
+app.MapDefaultEndpoints();
+app.MapAccountsEndpoints();
+app.MapHouseholdsEndpoints();</pre>
+</section>
+
+<!-- ───────────── A request ───────────── -->
+<section id="request-diagram" data-part="4" data-cue="Let's trace one request">
+  <h2>One request, two hops</h2>
+  <svg width="1640" height="440" viewBox="0 0 1640 440">
+    <defs><marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="160" width="220" height="120" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="110" y="214" fill="#e8eef8" font-size="32" text-anchor="middle">Browser</text>
+    <text x="110" y="252" fill="#8ea2c0" font-size="22" text-anchor="middle">Forms cookie</text>
+    <line x1="225" y1="220" x2="310" y2="220" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="320" y="160" width="280" height="120" rx="18" fill="#121b2f" stroke="#38bdf8" stroke-width="3"/>
+    <text x="460" y="214" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Gateway</text>
+    <text x="460" y="252" fill="#8ea2c0" font-size="22" text-anchor="middle">YARP accounts route</text>
+    <line x1="605" y1="220" x2="690" y2="220" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="700" y="160" width="380" height="120" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="890" y="214" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Accounts.Api</text>
+    <text x="890" y="252" fill="#8ea2c0" font-size="22" text-anchor="middle">UseAuthentication → remote</text>
+    <line x1="1085" y1="195" x2="1250" y2="195" stroke="#f5b544" stroke-width="4" marker-end="url(#arrow)"/>
+    <line x1="1255" y1="245" x2="1090" y2="245" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="1170" y="120" fill="#f5b544" font-size="24" text-anchor="middle">"who is this?"</text>
+    <text x="1170" y="150" fill="#f5b544" font-size="22" text-anchor="middle">cookies + API key</text>
+    <text x="1170" y="325" fill="#38bdf8" font-size="24" text-anchor="middle">user + roles</text>
+    <rect x="1260" y="160" width="380" height="120" rx="18" fill="#221b0d" stroke="#f5b544" stroke-width="3"/>
+    <text x="1450" y="214" fill="#e8eef8" font-size="32" font-weight="600" text-anchor="middle">Legacy IIS app</text>
+    <text x="1450" y="252" fill="#8ea2c0" font-size="22" text-anchor="middle">Forms authentication</text>
+  </svg>
+</section>
+
+<template id="flow">
+  <h2>A request, step by step</h2>
+  <div class="steps" style="grid-template-columns:1fr">
+    <div class="step item"><span class="num">1</span>Browser sends the request with the Forms cookie; YARP forwards it to Accounts.Api</div>
+    <div class="step item"><span class="num">2</span>UseAuthentication runs the default scheme: remote authentication</div>
+    <div class="step item"><span class="num">3</span>Remote client calls legacy, forwarding the cookies and the API key</div>
+    <div class="step item"><span class="num">4</span>Legacy checks the key, runs Forms auth: decrypt, validate, load user and roles</div>
+    <div class="step item"><span class="num">5</span>Accounts.Api builds a ClaimsPrincipal; authorization runs; the endpoint executes</div>
+  </div>
+</template>
+<section id="flow-2" data-part="4" data-cue="In Accounts.Api, UseAuthentication runs the default scheme" data-template="flow" data-highlight="1-3"></section>
+<section id="flow-3" data-part="4" data-cue="On the legacy side, the adapters' module recognizes the call" data-template="flow" data-highlight="4"></section>
+<section id="flow-4" data-part="4" data-cue="Accounts.Api turns that into a ClaimsPrincipal" data-template="flow" data-highlight="5"></section>
+
+<section id="round-trip" data-part="4" data-cue="So every authenticated request to the new service costs one extra round trip">
+  <div class="kicker">The price</div>
+  <p class="quote">Every authenticated request to the new service costs <span class="amber">one extra round trip</span> to the old service.</p>
+  <p class="muted" style="margin-top:40px">That's what not changing the legacy login costs.</p>
+</section>
+
+<section id="caching" data-part="4" data-cue="It's tempting to cache the answer">
+  <h2>Caching the answer</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Saves</h3><p>Remember which user a cookie belongs to for a minute or two, and skip the call.</p></div>
+    <div class="card legacy"><h3 class="amber">Costs</h3><p>Logout or an account lockout isn't seen until the entry expires. Roles decide who can approve invoices.</p></div>
+  </div>
+  <p style="margin-top:36px">Decide the window deliberately and write it down. Check what the adapters already do first.</p>
+</section>
+
+<!-- ───────────── Costs ───────────── -->
+<template id="costs">
+  <h2>The costs</h2>
+  <div class="cols">
+    <div class="card item"><h3>Latency</h3><p>A second HTTP call before any real work. Five API calls, five auth calls.</p></div>
+    <div class="card item"><h3>Availability coupling</h3><p>Legacy down means nobody can be authenticated.</p></div>
+    <div class="card item"><h3>Load moves the wrong way</h3><p>More migrated traffic means more calls back into legacy.</p></div>
+    <div class="card item"><h3>Security surface</h3><p>The remote-app endpoint and its API key are now sensitive.</p></div>
+  </div>
+</template>
+<section id="costs-0" data-part="5" data-cue="Let's be precise about the costs" data-template="costs"></section>
+<section id="costs-1" data-part="5" data-cue="Latency. Every request pays for a second HTTP call" data-template="costs" data-highlight="1"></section>
+<section id="costs-2" data-part="5" data-cue="Availability coupling." data-template="costs" data-highlight="2"></section>
+
+<section id="health" data-part="5" data-cue="The handover in docs/handover.md goes further">
+  <h2>Even the health endpoint fails</h2>
+  <div class="file">docs/handover.md</div>
+  <pre class="code" data-lang="md">If IIS is down, Accounts.Api returns 500 on everything, including `/health`.</pre>
+  <ul>
+    <li>Likely cause: remote auth is the <b>default scheme</b>, and UseAuthentication runs for every request, anonymous or not</li>
+    <li>A health check that depends on another system is a bad health check</li>
+    <li class="amber">Liveness fails → the orchestrator restarts healthy pods in a loop</li>
+  </ul>
+</section>
+
+<section id="costs-3" data-part="5" data-cue="Load moves the wrong way" data-template="costs" data-highlight="3"></section>
+<section id="costs-4" data-part="5" data-cue="And the security surface grows" data-template="costs" data-highlight="4"></section>
+
+<!-- ───────────── Remote session ───────────── -->
+<section id="session" data-part="6" data-cue="The adapters can also share session state">
+  <h2>Remote session</h2>
+  <ul>
+    <li>Core app fetches session values from legacy at the start of a request, writes changes back at the end</li>
+    <li><span class="accent">AddSessionClient</span> on the Core side, <span class="accent">AddSessionServer</span> on the Framework side</li>
+    <li>Every session key is registered with its type, so both sides serialize it the same way</li>
+    <li>Endpoints opt in; the session is locked for the whole request</li>
+  </ul>
+</section>
+
+<section id="session-needed" data-part="6" data-cue="That's slow, and it's fiddly">
+  <h2>Do you need session at all?</h2>
+  <pre class="code" data-lang="sh">git grep -n "Session\[" -- legacy
+# (no results)</pre>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code" data-lang="xml">&lt;sessionState mode="InProc" timeout="60" /&gt;</pre>
+  <p>Configured, never used. <span class="accent">The cheapest distributed session is the one you don't have.</span></p>
+</section>
+
+<!-- ───────────── Security and testing ───────────── -->
+<section id="api-key" data-part="7" data-cue="Start with the secret">
+  <h2>The same secret, committed twice</h2>
+  <div class="file">legacy/FeeBilling.Web/Web.config</div>
+  <pre class="code tight" data-lang="xml" data-mark="1">&lt;add key="RemoteAppApiKey" value="0c2f3f5e-6a44-4f7e-9b0c-2d1f6a1e9b7a" /&gt;</pre>
+  <div class="file">src/FeeBilling.Accounts.Api/appsettings.json</div>
+  <pre class="code tight" data-lang="json" data-mark="3">"RemoteApp": {
+  "Url": "http://localhost:8080",
+  "ApiKey": "0c2f3f5e-6a44-4f7e-9b0c-2d1f6a1e9b7a"
+}</pre>
+  <p class="small">Anyone who can read the repo can call the legacy auth endpoint. <span class="amber">Rotate it and move it to a secret store</span> (lesson 19).</p>
+</section>
+
+<section id="front-door" data-part="7" data-cue="Next, the front door">
+  <h2>Close the public path</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Gateway catch-all</h3><p>Forwards every path to IIS, including the remote-app endpoints the adapters add. Reachable from the internet unless blocked.</p></div>
+    <div class="card modern"><h3>Internal address</h3><p><span class="accent">RemoteApp:Url</span> points straight at the legacy app, not at the gateway. Good. The public path still needs closing.</p></div>
+  </div>
+</section>
+
+<section id="health-independent" data-part="7" data-cue="Then make health independent">
+  <h2>Make health independent</h2>
+  <ul class="checks">
+    <li>Pass <span class="accent">false</span> to AddAuthenticationClient: remote auth is no longer the default scheme</li>
+    <li>API endpoint groups require authorization with the remote scheme explicitly</li>
+    <li>Health and liveness stay anonymous and never call legacy</li>
+    <li>A timeout on the remote call, and an alert on its latency</li>
+  </ul>
+</section>
+
+<section id="tests" data-part="7" data-cue="Finally, testing">
+  <h2>Testing without legacy</h2>
+  <div class="file">tests/FeeBilling.Accounts.Api.Tests/Infrastructure/AccountsApiFixture.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,9">builder.UseSetting("RemoteApp:Url", "http://legacy.invalid");
+builder.UseSetting("RemoteApp:ApiKey", "not-used-in-tests");
+
+builder.ConfigureTestServices(services =>
+{
+    // Replace SystemWebAdapters remote authentication (which calls the legacy app).
+    services.AddAuthentication()
+        .AddScheme&lt;AuthenticationSchemeOptions, TestAuthHandler&gt;(TestAuthHandler.SchemeName, _ => { });
+    services.PostConfigure&lt;AuthenticationOptions&gt;(options =>
+    {
+        options.DefaultScheme = TestAuthHandler.SchemeName;
+        options.DefaultAuthenticateScheme = TestAuthHandler.SchemeName;
+        options.DefaultChallengeScheme = TestAuthHandler.SchemeName;
+    });
+});</pre>
+</section>
+
+<section id="test-handler" data-part="7" data-cue="The handler in TestAuthHandler.cs">
+  <h2>A fake identity from a header</h2>
+  <div class="file">tests/FeeBilling.Accounts.Api.Tests/Infrastructure/TestAuthHandler.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,5">public const string UserHeader = "X-Test-User";
+
+protected override Task&lt;AuthenticateResult&gt; HandleAuthenticateAsync()
+{
+    if (!Request.Headers.TryGetValue(UserHeader, out var userName) || string.IsNullOrEmpty(userName))
+    {
+        return Task.FromResult(AuthenticateResult.NoResult());
+    }
+    // …</pre>
+  <div class="file">tests/FeeBilling.Accounts.Api.Tests/AccountsEndpointsTests.cs</div>
+  <pre class="code tight" data-lang="cs">public async Task ListAccounts_WithoutUser_Returns401()</pre>
+</section>
+
+<section id="postconfigure" data-part="7" data-cue="Why PostConfigure, rather than a plain configure call?">
+  <h2>Why PostConfigure?</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Configure</h3><p>Callbacks run in registration order. The app already set its default scheme with AddAuthenticationClient(true), so a test's Configure can lose.</p></div>
+    <div class="card modern"><h3>PostConfigure</h3><p>Runs after every Configure callback, so the test scheme reliably wins.</p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">The kind of detail that passes on one machine and fails on another.</p>
+</section>
+
+<section id="honest" data-part="7" data-cue="Be honest about what that doesn't cover">
+  <h2>What the green tests prove</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Proven</h3><p>The authorization rules, with a fake identity.</p></div>
+    <div class="card legacy"><h3 class="amber">Not proven</h3><p>The real handshake with legacy. Add an environment-level test on Windows, with the legacy app running.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Exit plan ───────────── -->
+<template id="exit">
+  <h2>The exit plan</h2>
+  <div class="steps" style="grid-template-columns:1fr">
+    <div class="step item"><span class="num">1</span>An OpenID Connect provider; the gateway owns login and the session cookie</div>
+    <div class="step item"><span class="num">2</span>Legacy accepts the same identity: sign in once, known to old and new</div>
+    <div class="step item"><span class="num">3</span>Switch new services off the remote scheme, one service at a time</div>
+    <div class="step item"><span class="num">4</span>Remove AddRemoteAppServer, AddAuthenticationServer, the module, the key, the client</div>
+  </div>
+</template>
+<section id="exit-0" data-part="8" data-cue="Remote authentication is a bridge, so plan the far side of it" data-template="exit"></section>
+<section id="exit-1" data-part="8" data-cue="First, introduce an OpenID Connect identity provider" data-template="exit" data-highlight="1"></section>
+<section id="exit-2" data-part="8" data-cue="Second, make the legacy app accept that same identity" data-template="exit" data-highlight="2"></section>
+<section id="exit-3" data-part="8" data-cue="Third, switch the new services from the remote scheme" data-template="exit" data-highlight="3"></section>
+<section id="exit-4" data-part="8" data-cue="Fourth, once no service calls back into legacy for authentication" data-template="exit" data-highlight="4"></section>
+
+<section id="exit-adr" data-part="8" data-cue="Each of those steps is independently deployable">
+  <div class="kicker">A bridge, not a destination</div>
+  <p class="quote">Write the exit into an ADR with a <span class="accent">trigger</span> and a <span class="amber">date</span>, so the bridge doesn't quietly become permanent.</p>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<template id="traps">
+  <h2>Traps</h2>
+  <ul>
+    <li class="item">Treating remote authentication as the destination</li>
+    <li class="item">A health check that depends on another system</li>
+    <li class="item">Assuming Forms cookies can be shared directly with ASP.NET Core</li>
+    <li class="item">Committed secrets: the same key in two files</li>
+    <li class="item">Exposing the remote-app endpoints through the catch-all</li>
+    <li class="item">Adding remote session by default</li>
+    <li class="item">Believing green tests prove authentication works</li>
+  </ul>
+</template>
+<section id="traps-1" data-part="9" data-cue="The traps to call out" data-template="traps" data-show="1"></section>
+<section id="traps-2" data-part="9" data-cue="A health check that depends on another system. Keep liveness local" data-template="traps" data-show="2"></section>
+<section id="traps-3" data-part="9" data-cue="Assuming Forms authentication cookies can be shared directly" data-template="traps" data-show="3"></section>
+<section id="traps-4" data-part="9" data-cue="Committed secrets." data-template="traps" data-show="4"></section>
+<section id="traps-5" data-part="9" data-cue="Exposing the remote-app endpoints through the gateway's catch-all" data-template="traps" data-show="5"></section>
+<section id="traps-6" data-part="9" data-cue="Adding remote session by default." data-template="traps" data-show="6"></section>
+<section id="traps-7" data-part="9" data-cue="And believing green integration tests prove authentication works" data-template="traps" data-show="7"></section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="10" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Four questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="10" data-cue="How do old and new apps share a logged-in user during a migration?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 4</div>
+  <p class="question">How do old and new apps share a logged-in user during a migration?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="10" data-cue="There are three options.">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Remote authentication: the new app asks legacy on each request</li>
+    <li>Shared cookie: compatible middleware and a shared key ring</li>
+    <li>External identity provider with OpenID Connect first</li>
+    <li>FeeBilling: remote auth, because ASP.NET Core can't read a Forms ticket</li>
+    <li>Long-term target: OpenID Connect</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="10" data-cue="What are the trade-offs of remote authentication?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 4</div>
+  <p class="question">What are the trade-offs of remote authentication?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="10" data-cue="The upside is zero change to the legacy login">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li><span class="green">Upside:</span> zero change to the legacy login; works today</li>
+    <li>An extra round trip on every authenticated request</li>
+    <li>Legacy down means the new service is down, even /health</li>
+    <li>Legacy load grows as more traffic migrates</li>
+    <li>The endpoint and API key become security-sensitive</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="10" data-cue="How do you share session state between ASP.NET and ASP.NET Core?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 4</div>
+  <p class="question">How do you share session state between ASP.NET and ASP.NET Core?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="10" data-cue="With the adapters' remote session feature">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>The adapters' remote session: fetch values from legacy, write them back</li>
+    <li>Every key registered with a serializer on both sides; locked per request</li>
+    <li>Slow, so first check whether session is needed at all</li>
+    <li>FeeBilling's legacy code doesn't use session: don't add it</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="10" data-cue="How do you test an ASP.NET Core service whose authentication depends on another app?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 4</div>
+  <p class="question">How do you test an ASP.NET Core service whose authentication depends on another app?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="10" data-cue="In WebApplicationFactory, I replace the authentication scheme">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Replace the scheme in WebApplicationFactory with a test handler (TestAuthHandler)</li>
+    <li>Include a test that an anonymous request gets a 401</li>
+    <li>Say explicitly: this doesn't test the integration</li>
+    <li>Cover the real handshake with an environment-level test, legacy running</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Three ways to share a user: remote auth, shared cookie, external IdP first.</li>
+    <li class="item">FrameworkServices runs in IIS; CoreServices in ASP.NET Core; the shared package serves netstandard2.0.</li>
+    <li class="item">Every request: a round trip to legacy, coupled availability, growing legacy load.</li>
+    <li class="item">No remote session unless code actually uses session. FeeBilling's doesn't.</li>
+    <li class="item">Close the gaps: rotate the key, block the endpoints, independent health, test the real handshake.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="11" data-cue="Five things to remember from this lesson" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="11" data-cue="One: there are three ways to share a user" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="11" data-cue="Two: FrameworkServices runs in IIS" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="11" data-cue="Three: every authenticated request costs a round trip" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="11" data-cue="Four: don't add remote session" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="11" data-cue="Five: close the gaps" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="11" data-cue="In the next lesson, we'll look at what breaks silently">
+  <div class="kicker">Next</div>
+  <h1>11 · API Contract Parity: JSON and Dates</h1>
+  <p class="lead">What breaks silently when an endpoint moves from Web API 2 to ASP.NET Core.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

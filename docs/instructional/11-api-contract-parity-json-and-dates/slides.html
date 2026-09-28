@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 11 Slides</title>
+<!--
+  Slides for the lesson 11 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="11" data-lesson-title="API Contract Parity: JSON and Dates" data-parts="Introduction|The questions|Naming|Shapes STJ won't reproduce|Error contracts|Other differences|Dates|Contract tests|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 11</div>
+  <h1>API Contract Parity:<br>JSON and Dates</h1>
+  <p class="lead">Same URL, new server. The AngularJS app doesn't know, and mustn't notice.</p>
+</section>
+
+<section id="silent" data-part="0" data-cue="If the JSON shape changes even slightly, nothing throws">
+  <h2>Nothing throws</h2>
+  <div class="cols3">
+    <div class="card"><h3>undefined</h3><p>A property is read, and isn't there.</p></div>
+    <div class="card"><h3>An empty table</h3><p>The rows moved, the page renders nothing.</p></div>
+    <div class="card legacy"><h3 class="amber">The wrong day</h3><p>A date loses its time zone marker.</p></div>
+  </div>
+  <p class="muted" style="margin-top:40px">FeeBilling already has one of these regressions in the code.</p>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>What breaks silently when you move an endpoint from Web API 2 to ASP.NET Core?</li>
+    <li>How do you prove an API contract didn't change?</li>
+    <li>DateTime or DateTimeOffset, and when?</li>
+    <li>Why did the dates shift by a day?</li>
+  </ul>
+</section>
+
+<section id="thesis" data-part="1" data-cue="The single idea underneath all four answers">
+  <div class="kicker">The idea underneath</div>
+  <p class="quote">The contract is what the legacy endpoint <span class="accent">actually emitted on the wire</span>, not what the C# class looks like.</p>
+</section>
+
+<!-- ───────────── Naming ───────────── -->
+<section id="webapiconfig" data-part="2" data-cue="Start with property names">
+  <h2>Web API 2: Newtonsoft keeps the C# names</h2>
+  <div class="file">legacy/FeeBilling.Web/App_Start/WebApiConfig.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1,2">// JSON only. Default Newtonsoft contract resolver => PascalCase property names.
+// The AngularJS app is written against PascalCase (e.g. run.RunId, tier.AnnualRate).
+config.Formatters.Remove(config.Formatters.XmlFormatter);
+config.Formatters.JsonFormatter.SerializerSettings.ReferenceLoopHandling = ReferenceLoopHandling.Ignore;</pre>
+</section>
+
+<section id="stj-camel" data-part="2" data-cue="ASP.NET Core serializes with System.Text.Json">
+  <h2>A straight port changes every name</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Web API 2 · Newtonsoft</h3><pre class="code" data-lang="json" style="margin:0">{ "AccountNumber": "MRW000001001" }</pre></div>
+    <div class="card modern"><h3>ASP.NET Core · web defaults</h3><pre class="code" data-lang="json" style="margin:0">{ "accountNumber": "MRW000001001" }</pre></div>
+  </div>
+  <p style="margin-top:36px">account.AccountNumber → <span class="amber">undefined</span>. No exception, no log line, just an empty column.</p>
+</section>
+
+<section id="accounts-api-fix" data-part="2" data-cue="The team that migrated Accounts.Api knew this">
+  <h2>Accounts.Api kept the names, and tests it</h2>
+  <div class="file">src/FeeBilling.Accounts.Api/Program.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="2">// PascalCase JSON, same as Web API 2 + Newtonsoft. The AngularJS app reads account.AccountNumber etc.
+builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.PropertyNamingPolicy = null);</pre>
+  <div class="file">tests/FeeBilling.Accounts.Api.Tests/AccountsEndpointsTests.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="6,7">public async Task GetAccount_UsesPascalCasePropertyNames()
+{
+    // The AngularJS app reads account.AccountNumber, as Web API 2 + Newtonsoft produced it.
+    var json = await _client.GetStringAsync("/api/accounts/1001", TestContext.Current.CancellationToken);
+
+    Assert.Contains("\"AccountNumber\":", json);
+    Assert.DoesNotContain("\"accountNumber\":", json);
+}</pre>
+  <p class="small accent">The right pattern: assert on raw JSON.</p>
+</section>
+
+<section id="anonymous-catch" data-part="2" data-cue="Now the catch">
+  <h2>The catch: an anonymous object</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/BillingController.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="6">[HttpPost, Route("runs")]
+public IHttpActionResult StartRun(BillingRunRequest req)
+{
+    var user = HttpContext.Current.User.Identity.Name;
+    var runId = BillingRunService.Enqueue(req.FirmId, req.PeriodEnd, user);
+    return Ok(new { runId });   // double-click = two billing runs = double-billed clients
+}</pre>
+  <p>The C# property is <span class="amber">runId</span>, so Newtonsoft writes <span class="amber">runId</span>. Camel case.</p>
+</section>
+
+<section id="anonymous-js" data-part="2" data-cue="The AngularJS code agrees">
+  <h2>And the front end depends on it</h2>
+  <div class="file">legacy/FeeBilling.Web/App/services/api.service.js</div>
+  <pre class="code tight" data-lang="js" data-mark="1">// Returns { runId: 123 } (camelCase - the server returns an anonymous object).
+function startRun(firmId, periodEnd) {</pre>
+  <div class="file">legacy/FeeBilling.Web/App/billing/billing-review.controller.js</div>
+  <pre class="code tight" data-lang="js" data-mark="1">vm.message = 'Billing run #' + response.runId + ' queued.';</pre>
+</section>
+
+<section id="mixed" data-part="2" data-cue="The same controller mixes conventions">
+  <h2>One controller, two conventions</h2>
+  <table>
+    <tr><th>Response</th><th>Properties</th><th>Casing</th></tr>
+    <tr><td>POST runs (start)</td><td>runId</td><td><span class="amber">camel</span></td></tr>
+    <tr><td>GET runs (list)</td><td>Id, FirmId, PeriodEnd, Status, …, InvoiceCount, TotalAmount</td><td><span class="accent">Pascal</span></td></tr>
+    <tr><td>POST runs/{id}/approve</td><td>runId, approved</td><td><span class="amber">camel</span></td></tr>
+  </table>
+  <p class="muted" style="margin-top:36px">The front end depends on every one of them exactly as written.</p>
+</section>
+
+<section id="rule" data-part="2" data-cue="So a blanket rule of">
+  <div class="kicker">The rule</div>
+  <p class="quote">Not "make everything PascalCase". <span class="accent">Reproduce whatever legacy actually emitted, one response at a time.</span></p>
+  <p class="muted" style="margin-top:40px">That's why you capture real responses rather than reasoning about them.</p>
+</section>
+
+<!-- ───────────── Shapes ───────────── -->
+<section id="dataset" data-part="3" data-cue="The biggest one is the data set">
+  <h2>A DataSet, returned directly</h2>
+  <div class="file">legacy/FeeBilling.Web/Controllers/Api/BillingController.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="4,6">[HttpGet, Route("runs/{id:int}/invoices")]
+public HttpResponseMessage GetInvoices(int id, string format = "json")
+{
+    DataSet ds = InvoiceRepository.GetInvoiceDataSet(id);   // ADO.NET, no paging
+    if (format == "csv") return CsvResult(ds.Tables[0]);
+    return Request.CreateResponse(HttpStatusCode.OK, ds);
+}</pre>
+  <div class="file">legacy/FeeBilling.Web/App/services/api.service.js</div>
+  <pre class="code tight" data-lang="js">// Returns a serialized DataSet: { "Table": [ ...invoice rows... ] }</pre>
+</section>
+
+<section id="run-invoices" data-part="3" data-cue="The front end depends on that">
+  <h2>"Table", or a silently empty page</h2>
+  <div class="file">legacy/FeeBilling.Web/App/billing/run-invoices.controller.js</div>
+  <pre class="code" data-lang="js" data-mark="1,2,4">// The server sends back the whole DataSet, so the rows are under "Table" (FB-238).
+// If anyone names the DataTable on the server this page silently shows nothing.
+return api.getRunInvoices(runId).then(function (data) {
+    vm.invoices = data.Table || [];</pre>
+</section>
+
+<section id="stj-dataset" data-part="3" data-cue="System.Text.Json doesn't support serializing DataSet or DataTable">
+  <h2>No Table wrapper for free</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Under the legacy route</h3><p>An explicit response type with a <b>Table</b> property holding the rows. Ugly, and correct.</p></div>
+    <div class="card modern"><h3>Under the new, versioned route</h3><p>Design a proper paged shape.</p></div>
+  </div>
+  <div class="file" style="margin-top:36px">Sketch · target design</div>
+  <pre class="code" data-lang="cs">public sealed record LegacyInvoiceTable(IReadOnlyList&lt;InvoiceRow&gt; Table);</pre>
+</section>
+
+<section id="loops" data-part="3" data-cue="Reference loops are the next difference">
+  <h2>Reference loops</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Newtonsoft · Ignore</h3><p>Silently <b>omits</b> the property that would create the cycle.</p></div>
+    <div class="card"><h3>STJ · IgnoreCycles</h3><p>Writes <b>null</b> for the cycle instead. Different output.</p></div>
+  </div>
+  <p style="margin-top:36px" class="accent">Better: stop serializing entities. Project to DTOs, and cycles can't happen.</p>
+</section>
+
+<!-- ───────────── Errors ───────────── -->
+<section id="errors" data-part="4" data-cue="Errors are part of the contract">
+  <h2>Errors are part of the contract</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Web API 2</h3><pre class="code tight" data-lang="json" style="margin:0">{
+  "Message": "…",
+  "ModelState": {
+    "dto.Code": ["…"]
+  }
+}</pre></div>
+    <div class="card modern"><h3>ASP.NET Core · RFC 9457</h3><pre class="code tight" data-lang="json" style="margin:0">{
+  "title": "…",
+  "status": 400,
+  "detail": "…",
+  "errors": { … }
+}</pre></div>
+  </div>
+</section>
+
+<section id="schedule-edit" data-part="4" data-cue="Now look at legacy/FeeBilling.Web/App/schedules/schedule-edit.controller.js">
+  <h2>The schedule editor reads Message and ModelState</h2>
+  <div class="file">legacy/FeeBilling.Web/App/schedules/schedule-edit.controller.js</div>
+  <pre class="code tight" data-lang="js" data-mark="1,3,4,10">if (response.status === 400 &amp;&amp; response.data &amp;&amp; response.data.ModelState) {
+    // Web API 2 shape: { Message: "...", ModelState: { "dto.Code": ["..."] } }
+    vm.error = response.data.Message;
+    angular.forEach(response.data.ModelState, function (messages, key) {
+        angular.forEach(messages, function (message) {
+            vm.validationErrors.push({ field: key.replace(/^dto\./, ''), message: message });
+        });
+    });
+} else {
+    vm.error = (response.data &amp;&amp; response.data.Message) || 'Save failed (' + response.status + ').';
+}</pre>
+  <p class="small">Problem details → <span class="amber">"Save failed"</span>. Every validation message lost; nothing logs an error.</p>
+</section>
+
+<section id="per-route" data-part="4" data-cue="So decide per route">
+  <h2>Decide per route</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Legacy routes</h3><p>Still called by AngularJS: keep the legacy error shape.</p></div>
+    <div class="card modern"><h3>New versioned API</h3><p>Problem details.</p></div>
+  </div>
+  <p style="margin-top:36px">Put at least one <span class="accent">400</span> and one <span class="accent">404</span> case in the contract tests.</p>
+</section>
+
+<!-- ───────────── Other differences ───────────── -->
+<section id="enums" data-part="5" data-cue="Enums. The database stores schedule types">
+  <h2>Enums: invisible casing drift</h2>
+  <div class="file">src/FeeBilling.Domain/Entities/FeeScheduleType.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">/// &lt;summary&gt;Stored in FeeSchedules.ScheduleType as 'TIERED' | 'BLENDED' | 'FLAT'.&lt;/summary&gt;
+public enum FeeScheduleType
+{
+    // …
+    Tiered = 1,</pre>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">Legacy API emits</h3><p>"TIERED"</p></div>
+    <div class="card"><h3>String enum converter emits</h3><p>"Tiered": breaks JavaScript comparisons and the RegularExpression("TIERED|BLENDED|FLAT") attribute</p></div>
+  </div>
+</section>
+
+<section id="input" data-part="5" data-cue="Input is more forgiving than output">
+  <h2>Input is more forgiving than output</h2>
+  <ul>
+    <li>Web defaults read property names <b>case-insensitively</b></li>
+    <li>Numbers written as strings are accepted</li>
+    <li>So old front-end requests usually still bind</li>
+    <li class="amber">It's the responses that break</li>
+  </ul>
+</section>
+
+<section id="numbers" data-part="5" data-cue="Numbers. A C# decimal carries its scale">
+  <h2>Decimals keep their scale</h2>
+  <pre class="code" data-lang="json">{ "Amount": 5312.50 }</pre>
+  <p>The trailing zero goes out on the wire. Money formatting is part of what the client sees, so <span class="accent">snapshots include it</span>.</p>
+</section>
+
+<section id="js-float" data-part="5" data-cue="And inputs from the browser deserve a test too">
+  <h2>Floating point, from the browser</h2>
+  <div class="file">legacy/FeeBilling.Web/App/schedules/schedule-edit.controller.js</div>
+  <pre class="code tight" data-lang="js" data-mark="5">// The API stores AnnualRate as a fraction (0.0075) but users think in percent (0.75).
+// Multiply by 100 on load and divide by 100 on save. Keep these two in sync! (FB-256: a
+// schedule once went out at 75% because a new code path skipped the conversion.)
+// …
+tier.AnnualRate = tier.AnnualRate / 100;</pre>
+  <pre class="code" data-lang="js">0.35 / 100   // 0.0034999999999999996</pre>
+  <p class="small">Decide where it's rounded, and test with realistic input.</p>
+</section>
+
+<!-- ───────────── Dates ───────────── -->
+<section id="dates-legacy" data-part="6" data-cue="In legacy/FeeBilling.Web/Models/AccountDto.cs, the mapping for LastValuedAt has a comment">
+  <h2>Legacy: marked as UTC on purpose</h2>
+  <div class="file">legacy/FeeBilling.Web/Models/AccountDto.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="5">// LastValuedAt is stored in UTC. Mark it so the JSON carries a trailing 'Z' and the
+// browser converts it to local time. Without this, users west of UTC see the next
+// day's date after 8 p.m. (FB-288)
+LastValuedAt = a.LastValuedAt.HasValue
+    ? DateTime.SpecifyKind(a.LastValuedAt.Value, DateTimeKind.Utc)
+    : (DateTime?)null</pre>
+</section>
+
+<section id="dates-new" data-part="6" data-cue="In src/FeeBilling.Accounts.Api/Accounts/AccountDto.cs, the migrated version">
+  <h2>Migrated: the fix is gone</h2>
+  <div class="file">legacy/FeeBilling.Web/Models/AccountDto.cs</div>
+  <pre class="code tight" data-lang="cs">? DateTime.SpecifyKind(a.LastValuedAt.Value, DateTimeKind.Utc)</pre>
+  <div class="file">src/FeeBilling.Accounts.Api/Accounts/AccountDto.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">LastValuedAt = account.LastValuedAt,</pre>
+  <p class="amber">Handover issue #3, in one line.</p>
+</section>
+
+<section id="kind" data-part="6" data-cue="Here's the mechanism. A DateTime carries a Kind">
+  <h2>DateTime.Kind decides the suffix</h2>
+  <table>
+    <tr><th>Kind</th><th>Written as</th><th>Browser reads it as</th></tr>
+    <tr><td>Utc</td><td>…T00:30:00<span class="accent">Z</span></td><td>UTC, converted to local</td></tr>
+    <tr><td>Local</td><td>…T00:30:00 with an offset</td><td>That offset</td></tr>
+    <tr><td>Unspecified</td><td>…T00:30:00 (no suffix)</td><td><span class="amber">Local time</span></td></tr>
+  </table>
+  <p class="small muted" style="margin-top:30px">Values read from SQL Server come back Unspecified, in EF6 and EF Core: datetime2 has no time zone.</p>
+</section>
+
+<section id="seed" data-part="6" data-cue="Now use the seed data in database/seed/010-seed-q3-2026.sql">
+  <h2>One missing line, one day wrong</h2>
+  <div class="file">database/seed/010-seed-q3-2026.sql</div>
+  <pre class="code tight" data-lang="sql" data-mark="2">-- LastValuedAt is UTC: the valuation job for Sep 30 finished at 8:30 p.m. Eastern.
+DECLARE @valued datetime2(0) = '2026-10-01T00:30:00';</pre>
+  <div class="cols">
+    <div class="card modern"><h3>With the Z</h3><p>Eastern browser shows <b>September 30</b>, 8:30 p.m.</p></div>
+    <div class="card legacy"><h3 class="amber">Without the Z</h3><p>Shows <b>October 1</b>. Every user west of UTC, after 8 p.m.</p></div>
+  </div>
+</section>
+
+<template id="fixes">
+  <h2>Not the serializer: the Kind was lost</h2>
+  <div class="cols3">
+    <div class="card item"><h3>Minimal</h3><p>Restore parity in the DTO: SpecifyKind(…, Utc) again.</p></div>
+    <div class="card item"><h3>Structural</h3><p>An EF Core value converter on UTC columns, so no DTO can forget.</p></div>
+    <div class="card item"><h3>Design</h3><p>DateTimeOffset for instants, DateOnly for dates. Changes the wire: <span class="amber">new API version only</span>.</p></div>
+  </div>
+</template>
+<section id="fixes-0" data-part="6" data-cue="Notice who's to blame" data-template="fixes"></section>
+<section id="fixes-1" data-part="6" data-cue="The minimal fix restores parity in the DTO" data-template="fixes" data-highlight="1"></section>
+<section id="fixes-2" data-part="6" data-cue="The structural fix puts an EF Core value converter on UTC columns" data-template="fixes" data-highlight="2"></section>
+<section id="fixes-3" data-part="6" data-cue="The design fix uses DateTimeOffset for instants" data-template="fixes" data-highlight="3"></section>
+
+<section id="date-only" data-part="6" data-cue="Date-only values have the same trap in a quieter form">
+  <h2>Instants and calendar dates are different things</h2>
+  <div class="cols">
+    <div class="card"><h3>OpenedOn: a SQL date</h3><p>Arrives as midnight, Unspecified, and goes out with no suffix. The date filter shows it correctly.</p></div>
+    <div class="card legacy"><h3 class="amber">"Mark every date as UTC"</h3><p>Open dates start shifting back a day for users west of Greenwich.</p></div>
+  </div>
+  <p style="margin-top:36px"><span class="accent">DateTimeOffset</span> for instants. <span class="accent">DateOnly</span> for dates.</p>
+</section>
+
+<!-- ───────────── Contract tests ───────────── -->
+<section id="capture" data-part="7" data-cue="How do you prove a contract didn't change?">
+  <h2>Capture before you migrate</h2>
+  <div class="steps" style="grid-template-columns:1fr">
+    <div class="step"><span class="num">1</span>Record the real legacy response for every function in api.service.js</div>
+    <div class="step"><span class="num">2</span>Success and error cases; commit them</div>
+    <div class="step"><span class="num">3</span>Snapshot-test the new endpoint (e.g. Verify), volatile fields scrubbed</div>
+    <div class="step"><span class="num">4</span>Assert names, types and date suffixes, not just status codes</div>
+  </div>
+</section>
+
+<section id="regression-test" data-part="7" data-cue="And add a targeted regression test for this bug">
+  <h2>A test that fails today</h2>
+  <div class="file">Sketch · target design</div>
+  <pre class="code tight" data-lang="cs" data-mark="6">[Fact]
+public async Task GetAccount_LastValuedAt_IsWrittenAsUtc()
+{
+    var json = await _client.GetStringAsync("/api/accounts/1001", TestContext.Current.CancellationToken);
+    using var document = JsonDocument.Parse(json);
+    Assert.Equal("2026-10-01T00:30:00Z", document.RootElement.GetProperty("LastValuedAt").GetString());
+}</pre>
+  <p>Today: <span class="red">fails</span>. With the one-line fix: <span class="green">passes</span>.</p>
+</section>
+
+<section id="capture-practice" data-part="7" data-cue="What does capturing look like in practice?">
+  <h2>api.service.js is the checklist</h2>
+  <div class="cols3">
+    <div class="card"><h3>Billing</h3><p class="small">run list · a run · start run · run invoices · CSV export · approve · invoice PDF</p></div>
+    <div class="card"><h3>Fee schedules</h3><p class="small">list · one schedule · create · update</p></div>
+    <div class="card"><h3>Accounts</h3><p class="small">accounts list · a household · an account's positions</p></div>
+  </div>
+  <p style="margin-top:36px">For each: one success case, plus <span class="amber">not found</span>, <span class="amber">validation failure</span>, <span class="amber">not authorized</span>.</p>
+</section>
+
+<section id="non-json" data-part="7" data-cue="Don't forget the endpoints that don't return JSON">
+  <h2>Contracts that aren't JSON</h2>
+  <div class="cols">
+    <div class="card"><h3>CSV export</h3><p>Column order, number and date formatting, file name.</p></div>
+    <div class="card"><h3>Invoice PDF</h3><p>At least its content type.</p></div>
+  </div>
+</section>
+
+<section id="reconstruct" data-part="7" data-cue="If you can't run legacy, reconstruct the contract from both ends">
+  <h2>Can't run legacy? Use both ends</h2>
+  <div class="cols">
+    <div class="card"><h3>Server code</h3><p>What's emitted.</p></div>
+    <div class="card"><h3>AngularJS code</h3><p>Which fields are actually read. <span class="amber">Those must not change.</span></p></div>
+  </div>
+  <p class="muted" style="margin-top:36px">Several consumers? Consider consumer-driven contracts: each publishes its expectations; the provider's build verifies them all.</p>
+</section>
+
+<section id="typed-tests" data-part="7" data-cue="One warning about typed tests">
+  <h2>Typed tests share the server's mistakes</h2>
+  <div class="file">tests/FeeBilling.Accounts.Api.Tests/AccountsEndpointsTests.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1">var account = await _client.GetFromJsonAsync&lt;AccountDto&gt;("/api/accounts/1001", TestContext.Current.CancellationToken);</pre>
+  <p>Deserializing into the same class the server serialized from can't see a naming or date-suffix change.</p>
+  <p class="accent">Assert on raw JSON.</p>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<template id="traps">
+  <h2>Traps</h2>
+  <ul>
+    <li class="item">"We set PascalCase, so the contract is preserved"</li>
+    <li class="item">Trusting typed client tests</li>
+    <li class="item">Only testing the happy path</li>
+    <li class="item">Blaming the serializer for date bugs</li>
+    <li class="item">DateOnly or DateTimeOffset under a legacy route</li>
+    <li class="item">Enum casing drift, invisible in C#</li>
+    <li class="item">Floating-point inputs from the browser</li>
+  </ul>
+</template>
+<section id="traps-1" data-part="8" data-cue="The traps to call out" data-template="traps" data-show="1"></section>
+<section id="traps-2" data-part="8" data-cue="Trusting typed client tests" data-template="traps" data-show="2"></section>
+<section id="traps-3" data-part="8" data-cue="Only testing the happy path" data-template="traps" data-show="3"></section>
+<section id="traps-4" data-part="8" data-cue="Blaming the serializer for date bugs" data-template="traps" data-show="4"></section>
+<section id="traps-5" data-part="8" data-cue="Switching to DateOnly or DateTimeOffset under a legacy route" data-template="traps" data-show="5"></section>
+<section id="traps-6" data-part="8" data-cue="Enum casing drift, which is invisible in C#" data-template="traps" data-show="6"></section>
+<section id="traps-7" data-part="8" data-cue="And floating-point inputs from the browser" data-template="traps" data-show="7"></section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="9" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Four questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="9" data-cue="What breaks silently when you move an endpoint from Web API 2 to ASP.NET Core?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 4</div>
+  <p class="question">What breaks silently when you move an endpoint from Web API 2 to ASP.NET Core?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="9" data-cue="Property casing, because Newtonsoft keeps C# names">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Property casing: Newtonsoft keeps C# names; ASP.NET Core camel-cases</li>
+    <li>DataSet serialization: the Table wrapper disappears</li>
+    <li>Error bodies: Message and ModelState vs problem details</li>
+    <li>Enums, reference loops, and DateTime Kind (the trailing Z)</li>
+    <li>FeeBilling: the migrated DTO already lost its UTC marker</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="9" data-cue="How do you prove an API contract didn't change?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 4</div>
+  <p class="question">How do you prove an API contract didn't change?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="9" data-cue="Capture real legacy responses, including error cases">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Capture real legacy responses, including errors, and commit them</li>
+    <li>Snapshot-test the new endpoint's raw JSON, volatile fields scrubbed</li>
+    <li>Assert names, types and date formats, not just status codes</li>
+    <li>Write them before moving the endpoint; consumer-driven contracts for many consumers</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="9" data-cue="DateTime or DateTimeOffset?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 4</div>
+  <p class="question">DateTime or DateTimeOffset?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="9" data-cue="A DateTime carries a Kind, and values read from SQL come back Unspecified">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>DateTime carries a Kind; values from SQL come back Unspecified</li>
+    <li>DateTimeOffset: explicit offset, the safer default for instants</li>
+    <li>DateOnly for dates with no time: open date, period end</li>
+    <li>The type changes the JSON: new version; legacy route gets an explicit UTC Kind</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="9" data-cue="Why did the dates shift by a day?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 4</div>
+  <p class="question">Why did the dates shift by a day?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="9" data-cue="The value was stored in UTC but serialized without a Z">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Stored in UTC, serialized without a Z (Kind Unspecified)</li>
+    <li>The browser parsed it as local time</li>
+    <li>8:30 p.m. Eastern Sep 30 = 00:30 Oct 1 UTC → shows October 1</li>
+    <li>Fix: restore the UTC Kind (value converter) + a contract test asserting the Z</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">The contract is what legacy emitted. Start-run is camel case; a blanket PascalCase rule is wrong.</li>
+    <li class="item">No DataSet Table wrapper or Newtonsoft loop handling: build explicit response types.</li>
+    <li class="item">Error bodies are contract: the schedule editor needs Message and ModelState.</li>
+    <li class="item">Dates break through a lost Kind. Restore UTC; DateTimeOffset/DateOnly only in a new version.</li>
+    <li class="item">Prove parity with captured responses and raw-JSON snapshots, errors included.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember from this lesson" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: the contract is what legacy emitted on the wire" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: System.Text.Json won't reproduce" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: error bodies are part of the contract" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: dates break through a lost Kind" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: prove parity with captured legacy responses" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="10" data-cue="In the next lesson, we'll design the Billing API itself">
+  <div class="kicker">Next</div>
+  <h1>12 · Billing API: Idempotency, CQRS and Streaming</h1>
+  <p class="lead">Idempotency keys, CQRS and streaming exports.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>

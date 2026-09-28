@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME (fullstack) · **Work package:** WP-09 · **Prerequisites:** 09, 11, 12, 20
 
-**Audio lesson:** [22-angularjs-to-angular-strangler.mp3](22-angularjs-to-angular-strangler.mp3) · [Transcript](script.md)
+**Video:** [22-angularjs-to-angular-strangler.mp4](22-angularjs-to-angular-strangler.mp4) · [Slides](slides.html) · **Audio lesson:** [22-angularjs-to-angular-strangler.mp3](22-angularjs-to-angular-strangler.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

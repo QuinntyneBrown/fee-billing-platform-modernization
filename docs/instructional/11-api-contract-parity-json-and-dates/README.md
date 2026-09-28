@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work package:** WP-03 (and every migrated endpoint) · **Prerequisites:** 07, 09
 
-**Audio lesson:** [11-api-contract-parity-json-and-dates.mp3](11-api-contract-parity-json-and-dates.mp3) · [Transcript](script.md)
+**Video:** [11-api-contract-parity-json-and-dates.mp4](11-api-contract-parity-json-and-dates.mp4) · [Slides](slides.html) · **Audio lesson:** [11-api-contract-parity-json-and-dates.mp3](11-api-contract-parity-json-and-dates.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 

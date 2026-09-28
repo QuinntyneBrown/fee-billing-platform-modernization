@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 06 Slides</title>
+<!--
+  Slides for the lesson 06 video. Each <section> is one slide. data-cue is a phrase from script.md:
+  tools/instructional-video/build.cs shows the slide from the moment the narration reaches that phrase.
+  Open this file in a browser and use the arrow keys to step through the deck.
+-->
+<link rel="stylesheet" href="../assets/slides.css">
+</head>
+<body data-lesson-number="06" data-lesson-title="A Pure-Domain Fee Engine" data-parts="Introduction|The questions|Anatomy of a static calculator|Designing the engine|Edges vs core|Minimums and boundaries|The calculation trace|Proving it|Traps|Interview drill|Recap">
+
+<!-- ───────────── Intro ───────────── -->
+<section id="title" data-part="0">
+  <div class="kicker">FeeBilling modernization · Lesson 06</div>
+  <h1>A Pure-Domain<br>Fee Engine</h1>
+  <p class="lead">From static calculators to an engine you can test, prove and audit</p>
+</section>
+
+<section id="intro-problem" data-part="0" data-cue="The legacy fee logic is a handful of static classes">
+  <h2>What we're replacing</h2>
+  <p>A handful of static classes that reach into the web request, the ASP.NET cache, a stored procedure and a logging library. One is a copy-paste of another.</p>
+  <ul class="checks" style="margin-top:24px">
+    <li>Can't be unit tested</li>
+    <li>Can't run outside IIS without a fake request</li>
+    <li>Can't run in a Linux container at all</li>
+  </ul>
+</section>
+
+<!-- ───────────── Questions ───────────── -->
+<section id="questions" data-part="1" data-cue="The questions this lesson answers">
+  <h2>The questions this lesson answers</h2>
+  <ul>
+    <li>How do you make static, untestable logic testable without changing its behaviour?</li>
+    <li>Where does the clock go?</li>
+    <li>Strategy pattern or a switch statement?</li>
+    <li>How do you keep a domain layer pure over time?</li>
+    <li>How do you make every calculation auditable?</li>
+  </ul>
+</section>
+
+<section id="principle" data-part="1" data-cue="The design principle for this lesson">
+  <div class="kicker">Target architecture · principle 1</div>
+  <p class="quote">The domain is <span class="accent">pure</span>. No Entity Framework, no ASP.NET, no logging framework, no clock. Inputs in, invoice lines out.</p>
+  <p class="muted" style="margin-top:48px">That's what makes parity testing possible.</p>
+</section>
+
+<!-- ───────────── Anatomy ───────────── -->
+<section id="signature" data-part="2" data-cue="Anatomy of a static calculator">
+  <h2>Anatomy of a static calculator</h2>
+  <div class="file">legacy/FeeBilling.Core/FeeCalculator.cs</div>
+  <pre class="code" data-lang="cs">public static decimal CalculateQuarterlyFee(int accountId, DateTime periodEnd)</pre>
+  <p class="lead">The signature looks simple. It isn't.</p>
+</section>
+
+<section id="fee-calculator" data-part="2" data-cue="Open legacy/FeeBilling.Core/FeeCalculator.cs">
+  <div class="file">legacy/FeeBilling.Core/FeeCalculator.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="1,3,6,9,11,17,20">var db = DbContextFactory.Current; // pulled from HttpContext.Current.Items
+var account = db.Accounts
+    .Include("FeeSchedule.Tiers")
+    .Single(a => a.Id == accountId);
+var cacheKey = "aum_" + accountId + "_" + periodEnd.ToShortDateString(); // culture-dependent key
+var aum = HttpRuntime.Cache[cacheKey] as double?;
+if (aum == null)
+{
+    aum = (double)AumService.GetBillableAum(accountId, periodEnd);
+    HttpRuntime.Cache.Insert(cacheKey, aum, null,
+        DateTime.Now.AddMinutes(30), Cache.NoSlidingExpiration); // local time
+}
+// …
+foreach (var tier in account.FeeSchedule.Tiers.OrderBy(t => t.LowerBound))
+{
+    // …
+    fee += Math.Round(span * (double)tier.AnnualRate / 4, 2);  // double + per-tier rounding + /4
+}
+// …
+Log.Info("Fee for " + accountId + " = " + fee);</pre>
+</section>
+
+<template id="deps">
+  <h2>Seven hidden dependencies</h2>
+  <div class="grid7">
+    <div class="card item"><h3>1 · Ambient context</h3><p>DbContextFactory.Current, from HttpContext.Current.Items</p></div>
+    <div class="card item"><h3>2 · EF6</h3><p>String-based Include of the schedule and its tiers</p></div>
+    <div class="card item"><h3>3 · Stored procedure</h3><p>usp_GetBillableAum, inside the calculation</p></div>
+    <div class="card item"><h3>4 · Process-wide cache</h3><p>HttpRuntime.Cache, culture-dependent key</p></div>
+    <div class="card item"><h3>5 · The clock</h3><p>DateTime.Now, server local time</p></div>
+    <div class="card item"><h3>6 · log4net</h3><p>Log line built by string concatenation</p></div>
+    <div class="card item"><h3>7 · double</h3><p>Binary floating point for money</p></div>
+    <div class="card" style="border-style:dashed"><h3 class="amber">Result</h3><p class="muted">Can't be unit tested. Can't run outside IIS. Can't run in a Linux container.</p></div>
+  </div>
+</template>
+<section id="deps-1" data-part="2" data-cue="One: an ambient database context" data-template="deps" data-highlight="1"></section>
+
+<section id="db-context-factory" data-part="2" data-cue="Open legacy/FeeBilling.Data/DbContextFactory.cs">
+  <div class="file">legacy/FeeBilling.Data/DbContextFactory.cs</div>
+  <pre class="code" data-lang="cs" data-mark="5,6">/// &lt;summary&gt;
+/// One FeeBillingEntities per HTTP request, stashed in HttpContext.Current.Items.
+/// Disposed in Global.asax Application_EndRequest.
+///
+/// Anything that runs outside IIS (BillingRunner, tools, tests) has to fake an HttpContext
+/// first. See FeeBilling.BillingRunner/FakeHttpContext.cs.
+/// &lt;/summary&gt;
+public static class DbContextFactory</pre>
+</section>
+
+<section id="deps-2" data-part="2" data-cue="Two: Entity Framework 6" data-template="deps" data-highlight="2"></section>
+<section id="deps-3" data-part="2" data-cue="Three: a stored procedure" data-template="deps" data-highlight="3"></section>
+<section id="deps-4" data-part="2" data-cue="Four: a process-wide cache" data-template="deps" data-highlight="4"></section>
+<section id="deps-5" data-part="2" data-cue="Five: the clock" data-template="deps" data-highlight="5"></section>
+<section id="deps-6" data-part="2" data-cue="Six: log4net" data-template="deps" data-highlight="6"></section>
+<section id="deps-7" data-part="2" data-cue="And seven: double for money" data-template="deps" data-highlight="7"></section>
+<section id="deps-all" data-part="2" data-cue="Each of those is a reason it can't be unit tested" data-template="deps"></section>
+
+<section id="blended-copy" data-part="2" data-cue="Open legacy/FeeBilling.Core/BlendedFeeCalculator.cs">
+  <h2>The smell is the copy-paste</h2>
+  <div class="file">legacy/FeeBilling.Core/BlendedFeeCalculator.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1,2">// Copied from FeeCalculator for the blended schedules (FB-96, 2013).
+// Keep the two in sync!
+public static class BlendedFeeCalculator</pre>
+  <p class="muted">Two copies of the cache, the AUM lookup and the minimum-fee logic, with different rate logic in the middle.</p>
+</section>
+
+<!-- ───────────── Designing the engine ───────────── -->
+<section id="two-rules" data-part="3" data-cue="Designing the pure engine">
+  <h2>Two rules for the replacement</h2>
+  <div class="cols">
+    <div class="card modern"><h3>1 · Capture before you change</h3><p>The golden master from lesson four.</p></div>
+    <div class="card modern"><h3>2 · Build beside, not in place</h3><p>Legacy stays untouched as the measuring stick until cutover.</p></div>
+  </div>
+</section>
+
+<section id="shape" data-part="3" data-cue="The shape of the engine is simple">
+  <h2>Request in, result out</h2>
+  <svg width="1640" height="360" viewBox="0 0 1640 360">
+    <defs><marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#8ea2c0"/></marker></defs>
+    <rect x="0" y="40" width="470" height="280" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="235" y="104" fill="#e8eef8" font-size="38" font-weight="600" text-anchor="middle">FeeRequest</text>
+    <text x="235" y="164" fill="#8ea2c0" font-size="27" text-anchor="middle">fee schedule · billable AUM</text>
+    <text x="235" y="208" fill="#8ea2c0" font-size="27" text-anchor="middle">billing period · opened-on date</text>
+    <text x="235" y="252" fill="#8ea2c0" font-size="27" text-anchor="middle">household members + AUM</text>
+    <line x1="480" y1="180" x2="575" y2="180" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="585" y="40" width="470" height="280" rx="18" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="820" y="124" fill="#e8eef8" font-size="40" font-weight="600" text-anchor="middle">FeeEngine</text>
+    <text x="820" y="184" fill="#38bdf8" font-size="28" text-anchor="middle">pure computation</text>
+    <text x="820" y="228" fill="#8ea2c0" font-size="27" text-anchor="middle">no I/O · no clock · no logging</text>
+    <line x1="1065" y1="180" x2="1160" y2="180" stroke="#8ea2c0" stroke-width="4" marker-end="url(#arrow)"/>
+    <rect x="1170" y="40" width="470" height="280" rx="18" fill="#121b2f" stroke="#22304d" stroke-width="2"/>
+    <text x="1405" y="104" fill="#e8eef8" font-size="38" font-weight="600" text-anchor="middle">FeeResult</text>
+    <text x="1405" y="164" fill="#8ea2c0" font-size="27" text-anchor="middle">amount</text>
+    <text x="1405" y="208" fill="#8ea2c0" font-size="27" text-anchor="middle">household allocations</text>
+    <text x="1405" y="252" fill="#f5b544" font-size="27" text-anchor="middle">calculation trace</text>
+  </svg>
+  <p class="accent" style="margin-top:24px">Same inputs, same output, every time.</p>
+</section>
+
+<section id="explicit-inputs" data-part="3" data-cue="Every hidden dependency becomes an explicit input">
+  <h2>Hidden dependencies become explicit inputs</h2>
+  <table>
+    <tr><th>Legacy reaches for…</th><th>The engine receives…</th></tr>
+    <tr><td>DbContextFactory.Current</td><td>The fee schedule, as data on the request</td></tr>
+    <tr><td>usp_GetBillableAum</td><td>Billable AUM, a field on the request</td></tr>
+    <tr><td>DateTime.Now</td><td>The billing period, a field on the request</td></tr>
+    <tr><td>HttpRuntime.Cache</td><td>Nothing: caching is the caller's job</td></tr>
+    <tr><td>log4net</td><td>Nothing: it returns a trace, the caller logs</td></tr>
+  </table>
+</section>
+
+<section id="money" data-part="3" data-cue="Amounts on the request and the result use a small Money value object">
+  <h2>A small <span class="accent">Money</span> value object</h2>
+  <ul>
+    <li>Wraps a <b>decimal</b> together with a currency</li>
+    <li>Can't add a fee in one currency to an AUM in another by accident</li>
+    <li>One place for rounding helpers that always take an explicit midpoint mode</li>
+  </ul>
+  <p class="muted small" style="margin-top:28px">FeeBilling bills in Canadian dollars today.</p>
+</section>
+
+<template id="order">
+  <h2>The order of the steps comes from legacy</h2>
+  <div class="steps" style="grid-template-columns:1fr">
+    <div class="step item"><span class="num">1</span>Strategy produces the tier lines</div>
+    <div class="step item"><span class="num">2</span>Engine applies day-count basis and rounding, per the policy</div>
+    <div class="step item"><span class="num">3</span>Minimum fee</div>
+    <div class="step item"><span class="num">4</span>Pro-rating for accounts opened during the quarter</div>
+  </div>
+</template>
+<section id="order" data-part="3" data-cue="The order of the steps matters as much as the steps themselves" data-template="order"></section>
+
+<section id="prorate" data-part="3" data-cue="It's in BillingRunService.CalculateAccountFee">
+  <h2>Step 4 isn't in the calculator at all</h2>
+  <div class="file">legacy/FeeBilling.Core/BillingRunService.cs · CalculateAccountFee</div>
+  <pre class="code" data-lang="cs" data-mark="6">// FB-178: accounts opened during the quarter only pay for the days they were open.
+var quarter = BillingPeriod.ForQuarterEnding(periodEnd);
+if (account.OpenedOn > quarter.Start)
+{
+    var daysOpen = (periodEnd - account.OpenedOn).Days;
+    fee = Math.Round(fee * daysOpen / 90m, 2);</pre>
+  <p>Legacy applies the minimum first, <span class="amber">then pro-rates the minimum</span>. The trace shows both steps.</p>
+</section>
+
+<section id="strategy" data-part="3" data-cue="Schedule types are handled with the strategy pattern">
+  <h2>One strategy per schedule type</h2>
+  <div class="file">docs/brasswick-modernization-training-plan.md · WP-02 design</div>
+  <pre class="code" data-lang="cs" data-mark="3,7">public interface IFeeStrategy
+{
+    FeeScheduleType Handles { get; }
+    AnnualFeeResult CalculateAnnual(Money billableAum, FeeSchedule schedule);
+}
+
+public sealed class FeeEngine(IEnumerable&lt;IFeeStrategy&gt; strategies, BillingPolicy policy)
+{
+    public FeeResult Calculate(FeeRequest request);   // pure, no I/O, no clock
+}</pre>
+  <p class="muted small">Tiered · Blended · Flat · Householded, all injected; the engine picks by schedule type.</p>
+</section>
+
+<section id="switch" data-part="3" data-cue="Is that better than a switch statement?">
+  <h2>Strategies or a switch?</h2>
+  <div class="cols">
+    <div class="card modern"><h3>Strategies</h3><p>Each variant has real behaviour and tests of its own. The case here.</p></div>
+    <div class="card"><h3 class="muted">Switch</h3><p>Fine for a two-line mapping.</p></div>
+  </div>
+  <p class="amber" style="margin-top:40px">The legacy problem was never the switch. It was duplicating the whole calculator.</p>
+</section>
+
+<section id="policy" data-part="3" data-cue="Then there's the policy.">
+  <h2>An explicit <span class="accent">BillingPolicy</span></h2>
+  <div class="file">docs/brasswick-modernization-training-plan.md · WP-02 design</div>
+  <pre class="code" data-lang="cs">public sealed record BillingPolicy(
+    DayCountBasis Basis,                // AnnualDividedByFour | Actual365
+    RoundingMode Rounding,              // LegacyPerTier | EndOfCalculation
+    MidpointRounding Midpoint,
+    AllocationMethod Allocation);       // LegacyProportional | LargestRemainder</pre>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">BillingPolicy.Legacy</h3><p>Reproduces legacy exactly, including the double flag</p></div>
+    <div class="card modern"><h3>BillingPolicy.Corrected</h3><p>The fixes, behind flags, with sign-off</p></div>
+  </div>
+</section>
+
+<section id="tier-lines" data-part="3" data-cue="Now the key insight of the whole design">
+  <h2>The key insight: return tier lines</h2>
+  <div class="file">legacy/FeeBilling.Core/FeeCalculator.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1">fee += Math.Round(span * (double)tier.AnnualRate / 4, 2);  // double + per-tier rounding + /4</pre>
+  <ul>
+    <li>A strategy that returns one annual number can <span class="amber">never</span> reproduce per-tier rounding</li>
+    <li>Strategies return <b>tier lines</b>: band, span, rate</li>
+    <li>The engine rounds <span class="amber">per tier</span> (Legacy) or <span class="accent">once at the end</span> (Corrected)</li>
+  </ul>
+</section>
+
+<section id="legacy-paths" data-part="3" data-cue="The legacy double flag only applies to the paths">
+  <h2>"Legacy" isn't one behaviour</h2>
+  <div class="cols">
+    <div class="card legacy"><h3 class="amber">double</h3><p>FeeCalculator (tiered)<br>BlendedFeeCalculator</p></div>
+    <div class="card modern"><h3>decimal</h3><p>HouseholdFeeService</p></div>
+  </div>
+  <div class="file" style="margin-top:36px">legacy/FeeBilling.Core/HouseholdFeeService.cs</div>
+  <pre class="code" data-lang="cs">// Householding (FB-150, 2015). Written in decimal, unlike FeeCalculator - the double
+// version gave "funny cents" on the household statements.</pre>
+</section>
+
+<!-- ───────────── Edges versus core ───────────── -->
+<section id="edges" data-part="4" data-cue="Edges versus core">
+  <h2>Functional core, imperative shell</h2>
+  <svg width="1640" height="470" viewBox="0 0 1640 470">
+    <rect x="60" y="10" width="1520" height="450" rx="28" fill="#1a160c" stroke="#f5b544" stroke-width="3"/>
+    <text x="110" y="64" fill="#f5b544" font-size="30" font-weight="600">Shell: the API or the worker</text>
+    <rect x="530" y="150" width="580" height="170" rx="22" fill="#0f2233" stroke="#38bdf8" stroke-width="3"/>
+    <text x="820" y="226" fill="#e8eef8" font-size="40" font-weight="600" text-anchor="middle">Core: FeeEngine</text>
+    <text x="820" y="274" fill="#8ea2c0" font-size="28" text-anchor="middle">pure · deterministic</text>
+    <text x="110" y="150" fill="#e8eef8" font-size="28">Database</text>
+    <text x="110" y="190" fill="#8ea2c0" font-size="24">load schedules, AUM, households</text>
+    <text x="110" y="330" fill="#e8eef8" font-size="28">Writes</text>
+    <text x="110" y="370" fill="#8ea2c0" font-size="24">invoice lines + traces</text>
+    <text x="1530" y="150" fill="#e8eef8" font-size="28" text-anchor="end">Clock</text>
+    <text x="1530" y="190" fill="#8ea2c0" font-size="24" text-anchor="end">TimeProvider · firm time zone</text>
+    <text x="1530" y="330" fill="#e8eef8" font-size="28" text-anchor="end">Logging · caching</text>
+    <text x="1530" y="370" fill="#8ea2c0" font-size="24" text-anchor="end">ILogger · only if needed</text>
+  </svg>
+</section>
+
+<section id="worker-flow" data-part="4" data-cue="Picture the billing worker from lesson fifteen">
+  <h2>One chunk of accounts</h2>
+  <div class="timeline" style="grid-template-columns:repeat(4, 1fr)">
+    <div class="card"><h3>1 · Load</h3><p>Schedules, AUM, households in a few set-based queries</p></div>
+    <div class="card"><h3>2 · Build</h3><p>A list of fee requests</p></div>
+    <div class="card modern"><h3>3 · Calculate</h3><p>Engine per request: pure computation</p></div>
+    <div class="card"><h3>4 · Write</h3><p>Invoice lines + traces in one local transaction</p></div>
+  </div>
+  <p class="muted" style="margin-top:40px">All I/O before and after the engine, never inside it. No per-account stored procedure call.</p>
+</section>
+
+<section id="cache-bug" data-part="4" data-cue="Loading AUM is the shell's job">
+  <h2>Legacy's cache is a correctness bug</h2>
+  <div class="file">legacy/FeeBilling.Core/FeeCalculator.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="5">var aum = HttpRuntime.Cache[cacheKey] as double?;
+if (aum == null)
+{
+    aum = (double)AumService.GetBillableAum(accountId, periodEnd);
+    HttpRuntime.Cache.Insert(cacheKey, aum, null,
+        DateTime.Now.AddMinutes(30), Cache.NoSlidingExpiration); // local time
+}</pre>
+  <p>Thirty minutes, process-wide: a recalculation can use <span class="amber">stale AUM</span>.</p>
+</section>
+
+<section id="clock" data-part="4" data-cue="The clock deserves its own point">
+  <h2>Where does the clock go?</h2>
+  <p class="quote">Not in the domain. The engine takes <span class="accent">dates as inputs</span>.</p>
+  <ul style="margin-top:44px">
+    <li>The application layer asks <b>TimeProvider</b> what today is</li>
+    <li class="muted">netstandard2.0 has Microsoft.Bcl.TimeProvider, but better to keep the clock out of Domain entirely</li>
+  </ul>
+</section>
+
+<section id="quarter-helper" data-part="4" data-cue="Look at legacy/FeeBilling.Core/QuarterHelper.cs">
+  <div class="file">legacy/FeeBilling.Core/QuarterHelper.cs</div>
+  <pre class="code" data-lang="cs" data-mark="4">/// &lt;summary&gt;The most recent quarter end on or before today (server local time).&lt;/summary&gt;
+public static DateTime LastQuarterEnd()
+{
+    var today = DateTime.Now.Date;
+    return IsQuarterEnd(today) ? today : GetQuarterStart(today).AddDays(-1);
+}</pre>
+  <div class="file">legacy/FeeBilling.Tests/Core/QuarterHelperTests.cs</div>
+  <pre class="code" data-lang="cs">[TestMethod, Ignore("Depends on today's date")]</pre>
+  <p class="small">At the edge: <b>TimeProvider</b> + the firm's named time zone. In tests: <b>FakeTimeProvider</b> (Microsoft.Extensions.TimeProvider.Testing).</p>
+</section>
+
+<section id="time-zone" data-part="4" data-cue="And name the time zone">
+  <h2>Name the time zone</h2>
+  <p class="muted">Fake clock: 1 a.m. UTC, September 30, 2026</p>
+  <div class="cols">
+    <div class="card"><h3>UTC</h3><p>It's September 30</p><p>Last quarter end: <b class="accent">September 30</b></p></div>
+    <div class="card legacy"><h3 class="amber">Toronto</h3><p>It's still 9 p.m., September 29</p><p>Last quarter end: <b class="amber">June 30</b></p></div>
+  </div>
+  <p class="muted small" style="margin-top:32px">In a container, local time is usually UTC. Unnamed, the move quietly changes which quarter gets billed near midnight.</p>
+</section>
+
+<!-- ───────────── Minimums and boundaries ───────────── -->
+<section id="minimums" data-part="5" data-cue="Minimums, households and boundaries">
+  <h2>Minimums at the right level</h2>
+  <div class="cols">
+    <div class="card"><h3>Account minimum</h3><p>Accounts with their own schedule</p></div>
+    <div class="card"><h3>Household minimum</h3><p>The household fee, before allocation. No account minimum on top for members.</p></div>
+  </div>
+</section>
+
+<section id="household-min" data-part="5" data-cue="That's what legacy does">
+  <div class="file">legacy/FeeBilling.Core/HouseholdFeeService.cs</div>
+  <pre class="code" data-lang="cs" data-mark="1,2,5">var minQuarterly = household.FeeSchedule.MinimumAnnualFee / 4;
+if (fee &lt; minQuarterly) fee = minQuarterly;
+// …
+var householdFee = CalculateHouseholdQuarterlyFee(householdId, periodEnd, out members);
+return HouseholdAllocator.Allocate(householdFee, members);</pre>
+  <p class="muted">Household minimum first, then the allocator splits the result.</p>
+</section>
+
+<section id="blended-boundary" data-part="5" data-cue="The blended boundary">
+  <h2>The blended boundary</h2>
+  <div class="file">legacy/FeeBilling.Core/BlendedFeeCalculator.cs</div>
+  <pre class="code" data-lang="cs" data-mark="5">// Blended: whole AUM at the rate of the highest tier reached
+double rate = 0;
+foreach (var tier in account.FeeSchedule.Tiers.OrderBy(t => t.LowerBound))
+{
+    if (aum.Value > (double)tier.LowerBound || tier.LowerBound == 0)
+    {
+        rate = (double)tier.AnnualRate;
+    }
+}</pre>
+  <p>Exactly <b>$1,000,000</b> stays at 1%. "Cleaning it up" to ≥ drops that quarter's fee by <span class="amber">$625</span>.</p>
+</section>
+
+<section id="zero-aum" data-part="5" data-cue="And zero-AUM households">
+  <h2>Zero-AUM households</h2>
+  <div class="file">legacy/FeeBilling.Core/HouseholdAllocator.cs</div>
+  <pre class="code tight" data-lang="cs" data-mark="4">return members.ToDictionary(
+    m => m.AccountId,
+    m => Math.Round(householdFee * m.BillableAum / total, 2, MidpointRounding.AwayFromZero));
+// Sum of allocations can differ from householdFee by ±0.01 × (n-1). Divide-by-zero if total == 0.</pre>
+  <p>Legacy throws. Decide the corrected behaviour with the business, <span class="accent">record it in an ADR</span>, test it.</p>
+</section>
+
+<!-- ───────────── Trace ───────────── -->
+<section id="trace" data-part="6" data-cue="The calculation trace">
+  <h2>Every result carries a trace</h2>
+  <ul class="checks">
+    <li>Which tiers applied, and the AUM used</li>
+    <li>The day-count basis and factor</li>
+    <li>The rounding mode, and where rounding happened</li>
+    <li>Whether the minimum applied</li>
+    <li>Any pro-rating</li>
+  </ul>
+  <p class="muted" style="margin-top:20px">Stored with the invoice line.</p>
+</section>
+
+<section id="trace-why" data-part="6" data-cue="Why does this matter so much?">
+  <h2>Who reads the trace</h2>
+  <div class="cols3">
+    <div class="card"><h3>Compliance</h3><p>Answers a client's invoice dispute</p></div>
+    <div class="card"><h3>Parity report</h3><p>Categorizes and explains each difference</p></div>
+    <div class="card"><h3>Review screen</h3><p>The new billing review UI drills into it</p></div>
+  </div>
+  <p class="accent" style="margin-top:40px">Principle: every calculation is explainable.</p>
+</section>
+
+<!-- ───────────── Proving it ───────────── -->
+<template id="proof">
+  <h2>Three kinds of proof</h2>
+  <div class="cols3">
+    <div class="card item"><h3>Examples</h3><p>S1 to S7 with BillingPolicy.Legacy. Expected decimals as invariant-culture strings.</p></div>
+    <div class="card item"><h3>Properties</h3><p>Allocations sum to the household fee. Fee never decreases as AUM rises. Fee ≥ minimum.</p></div>
+    <div class="card item"><h3>Golden master</h3><p>BillingPolicy.Legacy: <b>zero</b> differences.</p></div>
+  </div>
+</template>
+<section id="proof-0" data-part="7" data-cue="Proving it, and keeping it pure" data-template="proof"></section>
+<section id="proof-1" data-part="7" data-cue="Example tests cover scenarios S1 to S7" data-template="proof" data-highlight="1"></section>
+<section id="proof-2" data-part="7" data-cue="Property-based tests, with a library like CsCheck or FsCheck" data-template="proof" data-highlight="2"></section>
+<section id="proof-3" data-part="7" data-cue="Then the real acceptance test: the golden master" data-template="proof" data-highlight="3"></section>
+
+<section id="keep-pure" data-part="7" data-cue="Keeping the domain pure over time is a separate problem">
+  <h2>Make the wrong thing hard</h2>
+  <div class="file">src/FeeBilling.Domain/FeeBilling.Domain.csproj · no package references</div>
+  <pre class="code" data-lang="xml">&lt;PropertyGroup&gt;
+  &lt;TargetFramework&gt;netstandard2.0&lt;/TargetFramework&gt;
+  &lt;RootNamespace&gt;FeeBilling.Domain&lt;/RootNamespace&gt;
+&lt;/PropertyGroup&gt;</pre>
+  <ul>
+    <li>CI check: fail if the domain project gains a package reference</li>
+    <li>Architecture test: no EF Core, ASP.NET Core, System.Web or logging</li>
+    <li>Banned-API analyzer for DateTime.Now · an ADR states the rule</li>
+  </ul>
+</section>
+
+<section id="where-runs" data-part="7" data-cue="Finally, where does the engine run?">
+  <h2>Where the engine runs</h2>
+  <div class="cols3">
+    <div class="card modern"><h3>Billing worker</h3><p>The quarterly billing run</p></div>
+    <div class="card modern"><h3>Billing API</h3><p>A what-if preview endpoint</p></div>
+    <div class="card legacy"><h3 class="amber">Legacy (maybe)</h3><p>netstandard2.0 allows it. Only with zero parity differences, behind a flag.</p></div>
+  </div>
+</section>
+
+<!-- ───────────── Traps ───────────── -->
+<section id="traps" data-part="8" data-cue="Here are the traps.">
+  <h2>Traps</h2>
+  <ul>
+    <li>Refactoring the static classes in place</li>
+    <li>Strategies that return a single annual number</li>
+    <li>Putting the cache in the domain</li>
+    <li>Injecting TimeProvider into the engine "for flexibility"</li>
+    <li>Forgetting what local time means in a container</li>
+    <li>Fixing the blended boundary while porting</li>
+    <li>Minimum at the wrong level · ignoring zero-AUM households</li>
+  </ul>
+</section>
+
+<!-- ───────────── Interview drill ───────────── -->
+<section id="drill" data-part="9" data-cue="Let's practise">
+  <div class="kicker">Interview drill</div>
+  <h1>Five questions</h1>
+  <p class="lead">After each question, pause and answer out loud. Then compare with the model answer.</p>
+</section>
+
+<section id="q1" data-part="9" data-cue="How do you make static, untestable business logic testable without changing its behaviour?" data-voice="interviewer">
+  <div class="kicker">Question 1 of 5</div>
+  <p class="question">How do you make static, untestable business logic testable without changing its behaviour?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a1" data-part="9" data-cue="First I capture its behaviour with a golden master">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Capture behaviour with a golden master, through a seam, untouched</li>
+    <li>Write a new pure implementation <span class="accent">beside</span> it</li>
+    <li>Hidden dependencies become explicit inputs: context, stored-procedure AUM, cache, clock</li>
+    <li>Prove equivalence with the Legacy policy, then retire the old code</li>
+  </ul>
+</section>
+
+<section id="q2" data-part="9" data-cue="Where does the clock go?" data-voice="interviewer">
+  <div class="kicker">Question 2 of 5</div>
+  <p class="question">Where does the clock go?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a2" data-part="9" data-cue="Not in the domain. The engine takes dates as inputs">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Not in the domain: period end and opened-on are inputs</li>
+    <li>The edge asks <b>TimeProvider</b>, in the firm's named time zone</li>
+    <li>Tests use <b>FakeTimeProvider</b></li>
+    <li>Containers run in UTC: near midnight you could bill the wrong quarter</li>
+  </ul>
+</section>
+
+<section id="q3" data-part="9" data-cue="Strategy pattern or a switch statement?" data-voice="interviewer">
+  <div class="kicker">Question 3 of 5</div>
+  <p class="question">Strategy pattern or a switch statement?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a3" data-part="9" data-cue="Strategies when each variant has real behaviour">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>Strategies when each variant has real behaviour and its own tests</li>
+    <li>Selected by schedule type, from dependency injection</li>
+    <li>A switch is fine for a trivial mapping</li>
+    <li>Legacy's smell was the copy-paste; strategies return tier lines</li>
+  </ul>
+</section>
+
+<section id="q4" data-part="9" data-cue="How do you keep a domain layer pure over time?" data-voice="interviewer">
+  <div class="kicker">Question 4 of 5</div>
+  <p class="question">How do you keep a domain layer pure over time?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a4" data-part="9" data-cue="Make the wrong thing hard. No package references">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>No package references in the domain project</li>
+    <li>Architecture test: no EF, ASP.NET Core or logging dependencies</li>
+    <li>Banned-API analyzer for DateTime.Now</li>
+    <li>An ADR that code review can enforce</li>
+  </ul>
+</section>
+
+<section id="q5" data-part="9" data-cue="How do you make every calculation auditable?" data-voice="interviewer">
+  <div class="kicker">Question 5 of 5</div>
+  <p class="question">How do you make every calculation auditable?</p>
+  <p class="hint">Answer out loud.</p>
+</section>
+<section id="a5" data-part="9" data-cue="Every result carries a calculation trace: the tiers applied">
+  <div class="kicker">Model answer</div>
+  <ul>
+    <li>A calculation trace on every result, stored with the invoice line</li>
+    <li>Tiers, AUM, basis and factor, rounding mode and points, minimum, pro-rating</li>
+    <li>Used by compliance, the parity report and the review screen</li>
+  </ul>
+</section>
+
+<!-- ───────────── Recap ───────────── -->
+<template id="recap">
+  <h2>Five things to remember</h2>
+  <ol class="recap">
+    <li class="item">Name the hidden dependencies: context, EF6, stored procedure, cache, clock, log4net, double.</li>
+    <li class="item">Build a pure engine beside the old code: request in, result and trace out.</li>
+    <li class="item">Strategies per schedule type, an explicit BillingPolicy, and tier lines.</li>
+    <li class="item">Clock, cache, database and logging live at the edges; name the time zone.</li>
+    <li class="item">Prove it with examples, properties and the golden master; guard purity with tests.</li>
+  </ol>
+</template>
+<section id="recap-0" data-part="10" data-cue="Five things to remember" data-template="recap" data-show="0"></section>
+<section id="recap-1" data-part="10" data-cue="One: name the hidden dependencies" data-template="recap" data-show="1"></section>
+<section id="recap-2" data-part="10" data-cue="Two: build a pure engine beside the old code" data-template="recap" data-show="2"></section>
+<section id="recap-3" data-part="10" data-cue="Three: strategies per schedule type" data-template="recap" data-show="3"></section>
+<section id="recap-4" data-part="10" data-cue="Four: the clock, cache, database and logging live at the edges" data-template="recap" data-show="4"></section>
+<section id="recap-5" data-part="10" data-cue="Five: prove it with examples" data-template="recap" data-show="5"></section>
+
+<section id="next" data-part="10" data-cue="In the next lesson">
+  <div class="kicker">Next</div>
+  <h1>07 · From System.Web to the ASP.NET Core Pipeline</h1>
+  <p class="lead">How Global.asax, HTTP modules and Web API 2 controllers map onto the ASP.NET Core pipeline.</p>
+</section>
+
+<script src="../assets/slides.js"></script>
+</body>
+</html>
