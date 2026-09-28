@@ -16,6 +16,7 @@ Every lesson comes in two forms:
 | `NN-topic.mp3` | The audio lesson. A narrator teaches; a second voice asks the interview questions in the drill. |
 | `script.md` | The transcript the audio is generated from. Read it, search it, or edit it and regenerate. |
 | `README.md` | The video outline: objectives, interview questions with strong-answer notes, files to show, a timed run sheet, demo commands, traps, and references. |
+| `NN-topic.mp4`, `slides.html` | The finished video (1080p, captions included) and the slide deck it's built from. **Lesson 01 so far.** Open `slides.html` in a browser and use the arrow keys to step through the deck. |
 
 "Before" code is the legacy code **as found** in `legacy/`. "After" code is a sketch of the target. The work packages themselves (WP-01 to WP-10) are deliberately not implemented in this repository.
 
@@ -87,6 +88,22 @@ dotnet run tools/instructional-audio/generate.cs -- --pronunciation-test
 - **Pronunciation:** `tools/instructional-audio/pronunciations.json` maps acronyms, file names and code to how they're spoken (`.NET` becomes "dot net", `SQL` becomes "sequel").
 - **Cache:** audio is cached per section in `tools/instructional-audio/.cache/` (gitignored), so editing one section of a script only re-synthesizes that section.
 - **Cost:** the whole series is roughly 450,000 characters, about $7 at $15 per million characters (as of September 2026). The dry run prints the estimate.
+
+## Building a video
+
+A lesson video is the lesson's narration MP3 with a slide deck timed to it. `tools/instructional-video/build.cs` screenshots each `<section>` of the lesson's `slides.html` with headless Edge or Chrome. It shows each slide from the moment the narration reaches that slide's `data-cue` phrase (a phrase from `script.md`), adds captions generated from the script, and encodes a 1080p MP4 with ffmpeg.
+
+```bash
+# The audio generator must have run for the lesson first: it writes the timing manifest the video is synced to.
+dotnet run tools/instructional-audio/generate.cs -- 01
+
+# ffmpeg needs libx264 (FFMPEG_PATH if it isn't on PATH). EDGE_PATH overrides the browser.
+export FFMPEG_PATH=/path/to/ffmpeg
+dotnet run tools/instructional-video/build.cs -- 01
+```
+
+- **Adding a video:** write `slides.html` for the lesson, using lesson 01's deck as the template. Give every slide except the first a `data-cue` taken verbatim from `script.md`, in narration order. The builder reports any cue it can't find.
+- **Timing accuracy:** section boundaries are exact. Slide changes within a section are estimated from word counts, so they land within a second or two of the cue.
 
 ## Before recording the videos
 

@@ -26,3 +26,6 @@ node_modules/
 
 # Instructional audio: per-chunk synthesis cache (tools/instructional-audio/generate.cs)
 tools/instructional-audio/.cache/
+
+# Instructional video: slide screenshots and ffmpeg inputs (tools/instructional-video/build.cs)
+tools/instructional-video/.cache/

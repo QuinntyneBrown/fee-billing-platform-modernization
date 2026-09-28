@@ -2,7 +2,7 @@
 
 > **Runtime:** ~20 min · **Level:** Senior / SME · **Work packages:** framing for all of WP-01 to WP-10 · **Prerequisites:** none
 
-**Audio lesson:** [01-migration-strategy-strangler-fig.mp3](01-migration-strategy-strangler-fig.mp3) · [Transcript](script.md)
+**Video:** [01-migration-strategy-strangler-fig.mp4](01-migration-strategy-strangler-fig.mp4) · [Slides](slides.html) · **Audio lesson:** [01-migration-strategy-strangler-fig.mp3](01-migration-strategy-strangler-fig.mp3) · [Transcript](script.md)
 
 ## Why this video exists
 
