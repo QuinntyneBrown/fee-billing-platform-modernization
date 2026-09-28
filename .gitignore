@@ -23,3 +23,6 @@ appsettings.*.local.json
 
 # Node
 node_modules/
+
+# Instructional audio: per-chunk synthesis cache (tools/instructional-audio/generate.cs)
+tools/instructional-audio/.cache/
